@@ -100,4 +100,4 @@ if(args.has('--run')){
  const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
  await run(await developmentElectron(),[stage,...(args.has('--smoke-test')?['--smoke-test']:[])],{env});
 }
-}finally{await macSigning.lock?.().catch(()=>{});}
+}finally{await macSigning.lock?.();}

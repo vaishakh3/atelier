@@ -96,13 +96,42 @@ export async function provisionLocalSigning({directory=defaultSigningDirectory()
   return{configured:true,certificateSha1:config.certificateSha1,reused};
 }
 
+/** Parse security's quoted, one-path-per-line output before making any change. */
+export function parseKeychainSearchList(output){
+  if(typeof output!=='string')throw new Error('The user keychain search list could not be safely read.');
+  try{return output.split('\n').map(line=>line.trim()).filter(Boolean).map(line=>{const value=JSON.parse(line);if(typeof value!=='string'||!path.isAbsolute(value)||value.includes('\0'))throw new Error();return value;});}
+  catch{throw new Error('The user keychain search list has an unknown format; no replacement list was written.');}
+}
+/** Temporary additive registration required by macOS identity lookup, even with --keychain. */
+export async function registerLocalSigningKeychain(keychain,runCommand=privateCommand){
+  const read=async()=>parseKeychainSearchList(await runCommand('/usr/bin/security',['list-keychains','-d','user']));
+  const same=entry=>path.resolve(entry)===path.resolve(keychain);
+  const original=await read();if(original.some(same))return async()=>{};
+  // Re-read immediately before the update and preserve any newly observed entries.
+  const latest=await read();if(latest.some(same))return async()=>{};
+  const baseline=[...latest,...original.filter(entry=>!latest.includes(entry))];let restoreNeeded=false;
+  const restore=async()=>{
+    if(!restoreNeeded)return;
+    const current=await read(),remaining=current.filter(entry=>!same(entry));
+    const preserved=[...remaining,...baseline.filter(entry=>!remaining.includes(entry))];
+    if(JSON.stringify(current)!==JSON.stringify(preserved))await runCommand('/usr/bin/security',['list-keychains','-d','user','-s',...preserved]);
+    restoreNeeded=false;
+  };
+  try{
+    restoreNeeded=true;await runCommand('/usr/bin/security',['list-keychains','-d','user','-s',...baseline,keychain]);
+    const confirmed=await read();if(!confirmed.some(same)||!baseline.every(entry=>confirmed.includes(entry)))throw new Error('The temporary local signing keychain registration could not be verified.');
+    return restore;
+  }catch(error){await restore().catch(()=>{});throw error;}
+}
 /** Unlock only the dedicated build keychain. Caller must invoke lock() in finally. */
 export async function loadLocalSigning({directory=defaultSigningDirectory(),required=false,runCommand=privateCommand}={}){
   const config=await readConfiguration(directory),files=paths(directory);
   if(!config){if(required)throw new Error('Run node scripts/local-signing.mjs --provision once before requiring persistent local signing.');return null;}
   if(config.state!=='ready'||config.accessVersion!==1||!await exists(files.keychain))throw new Error('Local signing setup is incomplete. Run node scripts/local-signing.mjs --provision to resume with the retained identity.');
-  await privatePath(files.keychain);await runCommand('/usr/bin/security',['unlock-keychain','-p',config.keychainPassword,files.keychain]);
-  return{identity:config.certificateSha1,keychain:files.keychain,certificate:files.certificate,lock:()=>runCommand('/usr/bin/security',['lock-keychain',files.keychain])};
+  await privatePath(files.keychain);let restore;
+  try{await runCommand('/usr/bin/security',['unlock-keychain','-p',config.keychainPassword,files.keychain]);restore=await registerLocalSigningKeychain(files.keychain,runCommand);}
+  catch(error){await runCommand('/usr/bin/security',['lock-keychain',files.keychain]).catch(()=>{});throw error;}
+  return{identity:config.certificateSha1,keychain:files.keychain,certificate:files.certificate,lock:async()=>{try{await restore();}finally{await runCommand('/usr/bin/security',['lock-keychain',files.keychain]);}}};
 }
 export function localSigningOptions(signer,entitlements){
   return{identity:signer.identity,keychain:signer.keychain,identityValidation:false,strictVerify:true,preAutoEntitlements:false,preEmbedProvisioningProfile:false,optionsForFile:()=>({hardenedRuntime:false,timestamp:'none',entitlements})};
