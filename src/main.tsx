@@ -1,5 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+import WorkspaceHost from './components/WorkspaceHost';
+import WorkspaceErrorBoundary from './components/WorkspaceErrorBoundary';
+import {AuthProvider} from './domain/auth';
 import './styles.css';
-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
+ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><WorkspaceErrorBoundary><AuthProvider><WorkspaceHost/></AuthProvider></WorkspaceErrorBoundary></React.StrictMode>);

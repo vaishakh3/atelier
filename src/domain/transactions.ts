@@ -1,6 +1,8 @@
 import type { Project, AiProposal, BimElement, ElementChange } from './types';
 import { uid } from './seed';
 import { worldToLocal } from '../model/geometry';
+import {previewRepetition} from './repetition';
+import {elementSchema} from './schema';
 
 export function auditProject(project:Project,action:string,affectedIds:string[]=[],actor='You'):Project {
   return {...project,version:project.version+1,updatedAt:new Date().toISOString(),audit:[{id:uid('audit'),action,affectedIds,actor,timestamp:new Date().toISOString()},...project.audit].slice(0,250)};
@@ -10,7 +12,7 @@ const editableFields=new Set(['name','material','typeId','width','depth','height
 const numericFields=new Set(['width','depth','height','x','y','z','rotation']);
 const geometryFields=new Set(['width','depth','height','x','y','z','rotation']);
 const writableProperties=new Set(['classification','status','specification','fireRating']);
-const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount']);
+const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','creations']);
 const unsafeKeys=new Set(['__proto__','prototype','constructor']);
 const own=(object:object,key:string)=>Object.prototype.hasOwnProperty.call(object,key);
 function plain(value:unknown):value is Record<string,unknown> {
@@ -19,8 +21,8 @@ function plain(value:unknown):value is Record<string,unknown> {
 function same(a:unknown,b:unknown):boolean {
   if(Object.is(a,b))return true;
   if(!plain(a)||!plain(b))return false;
-  const keys=Object.keys(a);
-  return keys.length===Object.keys(b).length&&keys.every(key=>own(b,key)&&same(a[key],b[key]));
+  const keys=Object.keys(a).filter(key=>a[key]!==undefined),other=Object.keys(b).filter(key=>b[key]!==undefined);
+  return keys.length===other.length&&keys.every(key=>own(b,key)&&same(a[key],b[key]));
 }
 function locked(project:Project,field:string):boolean {
   const fields=project.constraints.lockedProperties;
@@ -58,7 +60,21 @@ function validateOpening(element:BimElement,project:Project) {
 export function applyProposal(project:Project,proposal:AiProposal):Project {
   if(!plain(proposal)||Object.keys(proposal).some(key=>!proposalFields.has(key)))throw new Error('The proposal shape is invalid.');
   for(const key of ['id','prompt','summary','model','createdAt']as const)if(typeof proposal[key]!=='string'||proposal[key].length>10000)throw new Error('The proposal metadata is invalid.');
-  if(!['edit','analysis','schedule'].includes(proposal.kind)||!Array.isArray(proposal.changes)||proposal.changes.length>1000||!Array.isArray(proposal.selectedIds)||proposal.selectedIds.length>10000||proposal.selectedIds.some(id=>typeof id!=='string')||!Array.isArray(proposal.issues)||proposal.issues.length>500||proposal.issues.some(issue=>typeof issue!=='string'))throw new Error('The proposal shape is invalid.');
+  if(!['edit','analysis','schedule','repetition'].includes(proposal.kind)||!Array.isArray(proposal.changes)||proposal.changes.length>1000||!Array.isArray(proposal.selectedIds)||proposal.selectedIds.length>10000||proposal.selectedIds.some(id=>typeof id!=='string')||!Array.isArray(proposal.issues)||proposal.issues.length>500||proposal.issues.some(issue=>typeof issue!=='string'))throw new Error('The proposal shape is invalid.');
+  if(proposal.kind==='repetition'){
+    if(proposal.changes.length||own(proposal,'crewCount'))throw new Error('Evaluate repetition separately from edits and crew changes.');
+    const repetition=proposal.repetition;
+    if(!plain(repetition)||Object.keys(repetition).some(key=>!['sourceIds','count','offsetX','offsetY','idPrefix','sources'].includes(key))||!Array.isArray(repetition.sourceIds)||!repetition.sourceIds.length||repetition.sourceIds.length>100||repetition.sourceIds.some(id=>typeof id!=='string'||!proposal.selectedIds.includes(id))||new Set(repetition.sourceIds).size!==repetition.sourceIds.length||repetition.idPrefix!==proposal.id||!Array.isArray(repetition.sources)||repetition.sources.length>100||repetition.sources.some(source=>!elementSchema.safeParse(source).success)||!Array.isArray(proposal.creations)||proposal.creations.length>100||proposal.creations.some(creation=>!plain(creation)||typeof creation.elementId!=='string'))throw new Error('The repeated modelling scope or preview is invalid.');
+    const derived=previewRepetition(project,repetition);
+    if(derived.issues.length||!derived.elements.length)throw new Error(derived.issues.join(' ')||'The repeated geometry cannot be created.');
+    if(derived.sourceIds.length!==repetition.sources.length||new Set(repetition.sources.map(source=>source.id)).size!==repetition.sources.length||derived.sourceIds.some(id=>!repetition.sources.some(source=>source.id===id&&same(source,project.elements.find(element=>element.id===id)))))throw new Error('A repetition source or hosted opening changed after this preview. Generate a new proposal.');
+    if(proposal.creations.length!==derived.elements.length)throw new Error('The created-element review does not match the repeated operation.');
+    for(const element of derived.elements){const creation=proposal.creations.find(item=>item.elementId===element.id);if(!plain(creation)||Object.keys(creation).some(key=>!['elementId','before','after'].includes(key))||creation.before!==null||!same(creation.after,element))throw new Error('The repeated creation diff was changed or is incomplete.');if(!elementSchema.safeParse(element).success)throw new Error('A repeated element exceeds the supported model schema.');validateGeometry(element);validateProperties(element.properties);}
+    if(project.elements.length+derived.elements.length>10000)throw new Error('This repetition exceeds the supported project element limit.');
+    const next=structuredClone(project);next.elements.push(...derived.elements);for(const element of derived.elements)validateOpening(element,next);
+    return auditProject(next,`AI: ${proposal.summary}`,derived.elements.map(element=>element.id),'You · AI assisted');
+  }
+  if(own(proposal,'repetition')||own(proposal,'creations'))throw new Error('A repetition cannot be mixed with another proposal kind.');
   if(proposal.kind==='analysis') {
     if(proposal.changes.length||own(proposal,'crewCount'))throw new Error('An analysis response cannot change the project.');
     return structuredClone(project);

@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { menuActions } from './contracts';
-import type { CloseResult, DesktopInfo, DesktopMenuAction } from './contracts';
+import type { ApiKeyInput, ApiKeyStatus, CloseResult, DesktopInfo, DesktopMenuAction } from './contracts';
 
 contextBridge.exposeInMainWorld('atelierDesktop',Object.freeze({
   getInfo:():Promise<DesktopInfo>=>ipcRenderer.invoke('atelier:get-info'),
+  configureApiKey:(input:ApiKeyInput):Promise<ApiKeyStatus>=>ipcRenderer.invoke('atelier:configure-api-key',input),
+  chooseEnvFile:():Promise<ApiKeyStatus>=>ipcRenderer.invoke('atelier:choose-env-file'),
+  clearApiKey:():Promise<void>=>ipcRenderer.invoke('atelier:clear-api-key'),
   onMenuAction:(callback:(action:DesktopMenuAction)=>void)=>{
     if(typeof callback!=='function')throw new TypeError('A menu listener is required.');
     const listener=(_event:unknown,action:unknown)=>{if(typeof action==='string'&&(menuActions as readonly string[]).includes(action))callback(action as DesktopMenuAction);};

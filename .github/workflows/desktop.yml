@@ -1,0 +1,101 @@
+name: Desktop verification and release bundles
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      sign_release:
+        description: Sign with configured release credentials
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm run build
+
+  package:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: darwin
+            arch: arm64
+          - os: macos-15-intel
+            platform: darwin
+            arch: x64
+          - os: windows-2025
+            platform: win32
+            arch: x64
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    env:
+      ATELIER_MAC_SIGN_IDENTITY: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'darwin' && secrets.ATELIER_MAC_SIGN_IDENTITY || '' }}
+      APPLE_CERT_BASE64: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'darwin' && secrets.APPLE_CERT_BASE64 || '' }}
+      APPLE_CERT_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'darwin' && secrets.APPLE_CERT_PASSWORD || '' }}
+      APPLE_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'darwin' && secrets.APPLE_ID || '' }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'darwin' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'darwin' && secrets.APPLE_TEAM_ID || '' }}
+      WINDOWS_CERT_BASE64: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'win32' && secrets.WINDOWS_CERT_BASE64 || '' }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_release && matrix.platform == 'win32' && secrets.WINDOWS_CERTIFICATE_PASSWORD || '' }}
+      ATELIER_UPDATE_FEED_URL: ${{ vars.ATELIER_UPDATE_FEED_URL }}
+      ATELIER_UPDATE_PUBLIC_KEY: ${{ vars.ATELIER_UPDATE_PUBLIC_KEY }}
+      ATELIER_UPDATE_DOWNLOAD_ORIGINS: ${{ vars.ATELIER_UPDATE_DOWNLOAD_ORIGINS }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Prepare optional macOS signing identity
+        if: runner.os == 'macOS' && env.APPLE_CERT_BASE64 != ''
+        run: bash scripts/ci-macos-signing.sh
+      - name: Prepare optional Windows signing identity
+        if: runner.os == 'Windows' && env.WINDOWS_CERT_BASE64 != ''
+        shell: pwsh
+        run: |
+          $certificate = Join-Path $env:RUNNER_TEMP 'atelier-signing.pfx'
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64))
+          "WINDOWS_CERTIFICATE_FILE=$certificate" >> $env:GITHUB_ENV
+      - run: npm run build
+      - name: Package and inspect desktop application
+        run: node scripts/build-desktop.mjs --package --skip-frontend --platform=${{ matrix.platform }} --arch=${{ matrix.arch }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Atelier-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            outputs/Atelier-*-${{ matrix.platform }}-${{ matrix.arch }}.zip
+            outputs/Atelier-*-${{ matrix.platform }}-${{ matrix.arch }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary macOS signing material
+        if: always() && runner.os == 'macOS' && env.APPLE_CERT_BASE64 != ''
+        run: security delete-keychain "$RUNNER_TEMP/atelier-signing.keychain-db" || true
+      - name: Remove temporary Windows signing material
+        if: always() && runner.os == 'Windows' && env.WINDOWS_CERT_BASE64 != ''
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP 'atelier-signing.pfx')

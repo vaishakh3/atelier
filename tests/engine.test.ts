@@ -9,7 +9,7 @@ function project():Project {
   const wall:BimElement = { id:'wall-1', kind:'wall', name:'South wall', levelId:'ground', typeId:'wall-type', material:'Brick', x:0, y:0, z:0, width:10, depth:0.2, height:3, rotation:0, editable:true, properties:{} };
   return {
     schemaVersion:1, id:'fixture', name:'Regression house', description:'Independent deterministic fixture', location:'Pilot', units:'m', currency:'INR', version:3, createdAt:'2026-10-24', updatedAt:'2026-10-24', levels:[{id:'ground', name:'Ground', elevation:0}], grids:[],
-    elements:[wall, { ...wall, id:'door-1', kind:'door', name:'Door', typeId:'door-type', material:'Timber', width:1, depth:0.1, height:2, hostId:'wall-1' }, { ...wall, id:'window-1', kind:'window', name:'Window', typeId:'window-type', material:'Aluminium', width:2, depth:0.1, height:1.5, hostId:'wall-1' }, { ...wall, id:'slab-1', kind:'slab', name:'Floor', typeId:'slab-type', material:'Concrete', width:10, depth:8, height:0.15 }, { ...wall, id:'room-1', kind:'room', name:'Living', typeId:'room-type', material:'', width:5, depth:4, height:3 }],
+    elements:[wall, { ...wall, id:'door-1', kind:'door', name:'Door', typeId:'door-type', material:'Timber', x:1,width:1, depth:0.1, height:2, hostId:'wall-1' }, { ...wall, id:'window-1', kind:'window', name:'Window', typeId:'window-type', material:'Aluminium', x:3,z:1,width:2, depth:0.1, height:1.5, hostId:'wall-1' }, { ...wall, id:'slab-1', kind:'slab', name:'Floor', typeId:'slab-type', material:'Concrete', width:10, depth:8, height:0.15 }, { ...wall, id:'room-1', kind:'room', name:'Living', typeId:'room-type', material:'', width:5, depth:4, height:3 }],
     types:[
       {id:'wall-type',name:'Brick wall',kind:'wall',material:'Brick',unit:'m²',materialRate:100,labourRate:20,equipmentRate:0,wastePercent:10,approved:true,productivity:10,rateDate:'2026-10-01'},
       {id:'wall-alt',name:'Approved block wall',kind:'wall',material:'Block',unit:'m²',materialRate:70,labourRate:15,equipmentRate:0,wastePercent:5,approved:true,productivity:12,rateDate:'2026-10-01'},
@@ -43,6 +43,20 @@ describe('Deterministic quantity engine', () => {
   it('flags invalid geometry and missing types', () => {
     const input = project(); input.elements[0].width = -3; input.elements[0].typeId = 'unknown';
     expect(quantities(input)[0].issues.join(' ')).toMatch(/missing.*negative/);
+    expect(estimate(input).completeness).toBeLessThan(100);
+  });
+  it('deducts overlapping hosted openings once and flags the unresolved collision',()=>{
+    const input=project();input.elements[2].x=1.5;input.elements[2].z=0;
+    const line=quantities(input).find(item=>item.elementId==='wall-1')!;
+    expect(line.quantity).toBe(25.75);
+    expect(line.issues.join(' ')).toMatch(/overlap.*union/);
+    expect(estimate(input).completeness).toBeLessThan(100);
+  });
+  it('clips out-of-bounds openings to the wall and does not rank the invalid geometry as complete',()=>{
+    const input=project();input.elements[2].x=9;
+    const line=quantities(input).find(item=>item.elementId==='wall-1')!;
+    expect(line.quantity).toBe(26.5);
+    expect(line.issues.join(' ')).toMatch(/outside host wall bounds/);
     expect(estimate(input).completeness).toBeLessThan(100);
   });
 });
@@ -79,6 +93,19 @@ describe('Traceable cost engine', () => {
     expect(result.total).toBe(10830);
     expect(result.issues.join(' ')).toMatch(/already included in unit labour/);
   });
+  it('keeps a mismatched-currency rate unknown instead of silently relabelling its amount',()=>{
+    const input=project();input.types[0].rateCurrency='USD';input.types[0].rateSource='Supplier quote Q-42';
+    const result=estimate(input),line=result.lines.find(item=>item.id.startsWith('type:wall-type'))!;
+    expect(line.total).toBeNull();expect(line.material).toBeNull();expect(line.rateCurrency).toBe('USD');
+    expect(result.completeness).toBeLessThan(100);expect(line.issues.join(' ')).toMatch(/does not match project currency/);
+    input.types[0].rateCurrency='INR';expect(estimate(input).lines.find(item=>item.id===line.id)?.rateSource).toBe('Supplier quote Q-42');
+  });
+  it('rejects arithmetic overflow instead of exporting Infinity or fictitious free work',()=>{
+    const input=project();input.types[0].materialRate=1e308;
+    const cost=estimate(input);expect(cost.lines.find(line=>line.id.startsWith('type:wall-type'))?.material).toBeNull();expect(Number.isFinite(cost.total)).toBe(true);expect(cost.completeness).toBeLessThan(100);
+    input.elements[0].width=1e308;input.elements[0].height=1e308;
+    const measured=quantities(input)[0];expect(Number.isFinite(measured.quantity)).toBe(true);expect(measured.issues.join(' ')).toMatch(/Invalid measurement/);
+  });
 });
 
 describe('Calendar and resource schedule', () => {
@@ -93,6 +120,12 @@ describe('Calendar and resource schedule', () => {
     expect(result.workingDays).toBe(2);
     expect(result.durationDays).toBe(4);
     expect(estimate(input,result).overhead).toBe(400);
+  });
+  it('applies explicit holiday exceptions without consuming crew working days',()=>{
+    const input=project();input.schedule.activities=[activity('a',[],2)];input.schedule.holidays=['2026-11-03'];
+    const result=buildSchedule(input);
+    expect(result.finishDate).toBe('2026-11-04');expect(result.workingDays).toBe(2);expect(result.durationDays).toBe(3);expect(result.crewDays).toBe(2);
+    input.schedule.holidays=['2026-02-30'];expect(buildSchedule(input).feasible).toBe(false);
   });
   it('shifts a weekend project start to the next working date', () => {
     const input=project();input.schedule.startDate='2026-11-07';input.schedule.activities=[activity('a',[],1)];

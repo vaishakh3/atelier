@@ -7,11 +7,8 @@ const isDate = (value:string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isF
 
 /** A deliberately preliminary low-rise network; every activity remains editable. */
 export function generateActivities(project:Project):ActivityDefinition[] {
-  const measured = quantities(project);
-  const area = (kind:string) => measured.filter(line => line.kind === kind).reduce((sum, line) => {
-    const element = project.elements.find(item => item.id === line.elementId)!;
-    return sum + (kind === 'wall' ? Math.max(0, element.width * element.height - project.elements.filter(item => item.hostId === element.id).reduce((n, opening) => n + opening.width * opening.height, 0)) : element.width * element.depth);
-  }, 0);
+  const measured = quantities({...project,types:project.types.map(type=>({...type,unit:'m²'}))});
+  const area = (kind:string) => measured.filter(line => line.kind === kind&&line.unit==='m²').reduce((sum,line)=>sum+line.quantity,0);
   const floorArea = area('slab') || area('room');
   const groundAreas = project.levels.map(level => project.elements.filter(element => element.kind === 'slab' && element.levelId === level.id).reduce((sum, element) => sum + element.width * element.depth, 0));
   const footprint = Math.max(1, ...groundAreas);
@@ -48,7 +45,7 @@ function resolveModelQuantity(project:Project, activity:ActivityDefinition):{ qu
   // Keep all host geometry for opening deductions; change only measurement units, never canonical model data.
   const measured = quantities({ ...project, types:project.types.map(type => ({ ...type, unit })) });
   const matches = measured.filter(line => line.kind === activity.category && (!selected || selected.has(line.elementId)));
-  const invalid = matches.find(line => line.issues.some(issue => /must be positive|negative or non-finite|exceed gross/.test(issue)));
+  const invalid = matches.find(line => line.issues.some(issue => /must be positive|negative or non-finite|exceed gross|overlap|outside host|not aligned|same level|invalid opening|no valid|Invalid measurement/.test(issue)));
   if (invalid) return { quantity:0, issues, error:`${activity.name}: invalid source geometry (${invalid.name}); correct model dimensions before scheduling.` };
   const incompatible = matches.find(line => line.unit !== unit);
   if (incompatible) return { quantity:0, issues, error:`${activity.name}: ${incompatible.kind} cannot be measured in ${unit}; select a supported unit or a manual quantity.` };
@@ -83,6 +80,9 @@ export function buildSchedule(project:Project, overrides:{crews?:number;procurem
   if (!isDate(config.startDate)) return failure('Project start date must be a valid ISO date.');
   const calendar = Array.from(new Set(config.workingDays));
   if (!calendar.length || calendar.some(day => !Number.isInteger(day) || day < 0 || day > 6)) return failure('Working calendar must include valid weekdays (0 Sunday to 6 Saturday).');
+  if((config.holidays??[]).some(date=>!isDate(date)))return failure('Holiday exceptions must use valid ISO dates.');
+  const holidays=new Set(config.holidays??[]);
+  if(holidays.size)issues.push(`${holidays.size} explicit non-working holiday date(s) excluded from the working calendar.`);
   if (!Number.isInteger(crews) || crews < 1 || crews > 1000) return failure('Available crew count must be an integer between 1 and 1000.');
   if (!Number.isFinite(procurement) || procurement < 0) return failure('Procurement offset must be a non-negative number of calendar days.');
   if (crews > project.constraints.maxCrews) return failure(`Crew count ${crews} exceeds project limit ${project.constraints.maxCrews}.`);
@@ -137,7 +137,7 @@ export function buildSchedule(project:Project, overrides:{crews?:number;procurem
   const workDates:Date[] = [];
   const dateAt = (index:number):Date => {
     let cursor = workDates.length ? new Date(workDates[workDates.length - 1].getTime() + DAY) : new Date(origin);
-    while (workDates.length <= index) { if (calendar.includes(cursor.getUTCDay())) workDates.push(new Date(cursor)); cursor = new Date(cursor.getTime() + DAY); }
+    while (workDates.length <= index) { if (calendar.includes(cursor.getUTCDay())&&!holidays.has(iso(cursor))) workDates.push(new Date(cursor)); cursor = new Date(cursor.getTime() + DAY); }
     return workDates[index];
   };
   const release = new Map(input.map(activity => [activity.id, activity.leadTime > 0 ? origin.getTime() + Math.ceil(activity.leadTime + procurement) * DAY : origin.getTime()]));

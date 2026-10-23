@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/buildingSMART/IFC4.x-specification-models",
+  "commit": "ef22440ec501551ccc9689309560bbc7e26aa9d7",
+  "retrieved": "2026-10-24",
+  "copyright": "buildingSMART International Ltd.",
+  "licenseNote": "Repository states: all rights reserved until formal release; final IFC is licensed CC BY-ND 4.0. These final IFC4X3_ADD2 informative examples are retained unmodified with attribution. They do not establish certification.",
+  "files": [
+    {
+      "file": "wall-extruded-solid.ifc",
+      "source": "https://github.com/buildingSMART/IFC4.x-specification-models/blob/ef22440ec501551ccc9689309560bbc7e26aa9d7/models/building-elements/wall-extrusion/wall-extruded-solid.ifc",
+      "sha256": "7e1c9a3147300d3d9e787b657766cadb2d578930eccf8956313f2f4ee976ff99",
+      "bytes": 3313,
+      "modified": false
+    },
+    {
+      "file": "slab-extruded-solid.ifc",
+      "source": "https://github.com/buildingSMART/IFC4.x-specification-models/blob/ef22440ec501551ccc9689309560bbc7e26aa9d7/models/building-elements/slab-extrusion/slab-extruded-solid.ifc",
+      "sha256": "0e4b80b98d8f1576d0c997af24b9486eb638de9f8428959fb6067a3bb74a4aca",
+      "bytes": 3189,
+      "modified": false
+    },
+    {
+      "file": "slab-tessellated-unique-vertices.ifc",
+      "source": "https://github.com/buildingSMART/IFC4.x-specification-models/blob/ef22440ec501551ccc9689309560bbc7e26aa9d7/models/tessellated-shape/slab-tessellated-unique-vertices/slab-tessellated-unique-vertices.ifc",
+      "sha256": "b1611154ea511526e5de5a58ea90e6cfb5abb2d8a6294d8c5f63cd6e297e912b",
+      "bytes": 5060,
+      "modified": false
+    }
+  ]
+}

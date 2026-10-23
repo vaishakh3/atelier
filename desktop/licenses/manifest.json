@@ -1,0 +1,91 @@
+{
+  "format": 1,
+  "packages": [
+    {
+      "name": "@react-three/fiber",
+      "version": "9.8.2",
+      "files": [
+        {
+          "path": "fiber-9.8.2/LICENSE",
+          "sourceUrl": "https://raw.githubusercontent.com/pmndrs/react-three-fiber/v9.8.2/LICENSE",
+          "sha256": "9c35b5de7b7493a707fffe4eb23bd2f7f449153c1911f7c6eefb4e591fd5349a",
+          "purpose": "Original license from the matching upstream release tag, omitted from the npm package. npm gitHead is e6ec3506ebf7879c26bd5ac27986b5d4421f3254."
+        }
+      ]
+    },
+    {
+      "name": "draco3d",
+      "version": "1.5.9",
+      "files": [
+        {
+          "path": "draco3d-1.5.9/LICENSE",
+          "sourceUrl": "https://raw.githubusercontent.com/google/draco/1.5.9/LICENSE",
+          "sha256": "d3709b0fb4b8a94bbb1d02b8a2e484f258b0d9c5c5a01f940391f3fe662cd1a4",
+          "purpose": "Complete upstream release license, including its embedded third-party notices; release tree has no separate NOTICE file."
+        }
+      ]
+    },
+    {
+      "name": "maath",
+      "version": "0.10.8",
+      "files": [
+        {
+          "path": "maath-0.10.8/published-package.json",
+          "sourceUrl": "https://registry.npmjs.org/maath/-/maath-0.10.8.tgz#package/package.json",
+          "sha256": "a8fd36627cbea15dd5326291e7b6eaf826dd2275114c2a684b4b213a2c899ac2",
+          "purpose": "Unmodified exact published package metadata; retains all original author and declared-license fields."
+        },
+        {
+          "path": "license-standards/MIT.txt",
+          "sourceUrl": "https://raw.githubusercontent.com/spdx/license-list-data/main/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "purpose": "Verbatim SPDX standard MIT license text for the package-declared MIT license. The published package and pinned upstream tree provide no license file/copyright year. Template placeholders are left intact rather than inventing a holder or year."
+        }
+      ],
+      "upstream": "https://github.com/pmndrs/maath/tree/626d198fbae28ba82f2f1b184db7fcafd4d23846",
+      "releaseTag": "maath@0.10.8"
+    },
+    {
+      "name": "stats-gl",
+      "version": "2.4.2",
+      "files": [
+        {
+          "path": "stats-gl-2.4.2/published-package.json",
+          "sourceUrl": "https://registry.npmjs.org/stats-gl/-/stats-gl-2.4.2.tgz#package/package.json",
+          "sha256": "99511b9c6d34746ac694b3c991ff0419e465df7c6923255d5a91c8fa9cad081e",
+          "purpose": "Unmodified exact published package metadata; retains all original author and declared-license fields."
+        },
+        {
+          "path": "license-standards/MIT.txt",
+          "sourceUrl": "https://raw.githubusercontent.com/spdx/license-list-data/main/text/MIT.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "purpose": "Verbatim SPDX standard MIT license text for the package-declared MIT license. The published package and pinned upstream tree provide no license file/copyright year. Template placeholders are left intact rather than inventing a holder or year."
+        },
+        {
+          "path": "stats-gl-2.4.2/published-README.md",
+          "sourceUrl": "https://registry.npmjs.org/stats-gl/-/stats-gl-2.4.2.tgz#package/README.md",
+          "sha256": "cd3199d6423780f805bf7f0cdf73dffc595c661f3539ad7c33a762eee60e4fd3",
+          "purpose": "Unmodified published README retains its MIT licensing statement and maintainer attribution. Pinned npm gitHead c12b2e391d5a88616e0b30f3c7f0577966426239 contains no LICENSE or NOTICE file."
+        }
+      ]
+    },
+    {
+      "name": "@mediapipe/tasks-vision",
+      "version": "0.10.17",
+      "files": [
+        {
+          "path": "mediapipe-tasks-vision-0.10.17/NOTICE-from-published-source.txt",
+          "sourceUrl": "https://registry.npmjs.org/@mediapipe/tasks-vision/-/tasks-vision-0.10.17.tgz#package/vision.d.ts",
+          "sha256": "79bdafb4a72eef6f3f609492fd1c0571bcb21d109e10aa2a43fb7bff95e64935",
+          "purpose": "Unmodified copyright and Apache license header from the exact published source: Copyright 2022 The MediaPipe Authors. The npm package supplies no separate NOTICE/LICENSE file."
+        },
+        {
+          "path": "license-standards/Apache-2.0.txt",
+          "sourceUrl": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "purpose": "Verbatim Apache Software Foundation version 2 license text referenced by the exact published source header."
+        }
+      ]
+    }
+  ]
+}

@@ -22,9 +22,15 @@ export function estimate(project:Project, scheduleResult?:ScheduleResult):CostRe
     const type = project.types.find(candidate => candidate.id === first.typeId);
     const quantity = group.reduce((sum, line) => sum + line.quantity, 0);
     const lineIssues = Array.from(new Set(group.flatMap(line => line.issues)));
+    const currencyMatches=!type?.rateCurrency||type.rateCurrency===project.currency;
+    if(!currencyMatches)lineIssues.push(`Rate currency ${type?.rateCurrency} does not match project currency ${project.currency}; conversion must be entered explicitly.`);
+    if(!type?.rateSource)lineIssues.push('Rate source not supplied; confirm quotation or library provenance.');
     const component = (rate:number|null|undefined, label:string) => {
+      if(!currencyMatches)return null;
       if (!usableRate(rate)) { lineIssues.push(`Missing or invalid ${label} rate; this component is unknown, not free.`); return null; }
-      return money(quantity * rate);
+      const value=quantity*rate;
+      if(!Number.isFinite(value)||!Number.isSafeInteger(Math.round(value*100))){lineIssues.push(`Invalid ${label} calculation exceeds supported monetary precision; this component is unresolved.`);return null;}
+      return money(value);
     };
     const lineMaterial = component(type?.materialRate, 'material');
     const lineLabour = component(type?.labourRate, 'labour');
@@ -32,11 +38,11 @@ export function estimate(project:Project, scheduleResult?:ScheduleResult):CostRe
     const wasteKnown = type && Number.isFinite(type.wastePercent) && type.wastePercent >= 0;
     if (!wasteKnown) lineIssues.push('Waste factor is unknown or invalid.');
     const lineWaste = lineMaterial !== null && wasteKnown ? money(lineMaterial * type.wastePercent / 100) : 0;
-    const invalidGeometry = lineIssues.some(issue => /must be positive|negative or non-finite|exceed gross|does not match/.test(issue));
+    const invalidGeometry = lineIssues.some(issue => /must be positive|negative or non-finite|exceed gross|does not match|overlap|outside host|not aligned|same level|invalid opening|no valid|Invalid measurement/.test(issue));
     const total = lineMaterial !== null && lineLabour !== null && lineEquipment !== null && wasteKnown && !invalidGeometry ? money(lineMaterial + lineLabour + lineEquipment + lineWaste) : null;
     material += lineMaterial ?? 0; labour += lineLabour ?? 0; equipment += lineEquipment ?? 0; waste += lineWaste;
     count++; if (total !== null) complete++;
-    lines.push({ id:`type:${first.typeId}:${first.unit}`, name:type?.name ?? `Unmapped: ${first.typeId || first.name}`, sourceIds:group.map(line => line.elementId), quantity, unit:first.unit, material:lineMaterial, labour:lineLabour, equipment:lineEquipment, waste:lineWaste, total, formula:`${quantity} ${first.unit} × (material ${type?.materialRate ?? '?'} + labour ${type?.labourRate ?? '?'} + equipment ${type?.equipmentRate ?? '?'}) + material waste ${type?.wastePercent ?? '?'}%`, rateDate:type?.rateDate ?? '', issues:lineIssues });
+    lines.push({ id:`type:${first.typeId}:${first.unit}`, name:type?.name ?? `Unmapped: ${first.typeId || first.name}`, sourceIds:group.map(line => line.elementId), quantity, unit:first.unit, material:lineMaterial, labour:lineLabour, equipment:lineEquipment, waste:lineWaste, total, formula:`${quantity} ${first.unit} × (material ${type?.materialRate ?? '?'} + labour ${type?.labourRate ?? '?'} + equipment ${type?.equipmentRate ?? '?'}) + material waste ${type?.wastePercent ?? '?'}%`, rateDate:type?.rateDate ?? '', rateCurrency:type?.rateCurrency??project.currency,rateSource:type?.rateSource??'',issues:lineIssues });
   }
   for (const allowance of project.allowances) {
     if (!allowance.included) { issues.push(`Excluded scope: ${allowance.name}.`); continue; }
@@ -67,6 +73,7 @@ export function estimate(project:Project, scheduleResult?:ScheduleResult):CostRe
   const references = project.elements.filter(element => element.kind === 'reference');
   if (references.length) issues.push(`${references.length} reference-only element(s) excluded from measured cost scope.`);
   if (!project.allowances.length) issues.push('No independent scope allowances entered. Review foundations, services, site work, permits, taxes and other unmodelled costs.');
+  if(project.types.some(type=>!type.rateCurrency&&measured.some(line=>line.typeId===type.id)))issues.push(`Legacy rates without an explicit rate currency are assumed to use project currency ${project.currency}; confirm before changing currency.`);
   issues.push('Preliminary estimate. Completeness covers mapped model items and included allowances; unentered scope is not represented. Rates are user-supplied.');
   if (complete < count) issues.push('Total is a known subtotal: unknown components and allowances are excluded until resolved.');
   const completeness = count ? Math.round(100 * complete / count) : 0;

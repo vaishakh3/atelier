@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBlankProject } from '../src/domain/seed';
 import type { BimElement } from '../src/domain/types';
-import { cameraFitDistance, createDrawnElement, footprint, localToWorld, modelBounds, nearestHostWall, wallSegments, worldToLocal } from '../src/model/geometry';
+import { cameraFitDistance, createDrawnElement, footprint, hostedOpeningGeometry, localToWorld, modelBounds, nearestHostWall, validateModelGeometry, wallSegments, worldToLocal } from '../src/model/geometry';
 
 function wall(extra:Partial<BimElement>={}):BimElement {
   return {id:'w',kind:'wall',name:'Wall',levelId:'level-0',typeId:'wall-aac',material:'AAC block',x:0,y:0,z:0,width:6,depth:.2,height:3,rotation:0,editable:true,properties:{},...extra};
@@ -42,6 +42,7 @@ describe('BIM editing geometry',()=>{
     const segments=wallSegments(w,[a,b]);
     expect(segments.every(s=>s.width>0&&s.height>0)).toBe(true);
     expect(segments.reduce((sum,s)=>sum+s.width*s.height,0)).toBeCloseTo(12);
+    const union=hostedOpeningGeometry(w,[a,b]);expect(union.unionArea).toBe(6);expect(union.issues.some(issue=>issue.code==='opening-overlap')).toBe(true);
   });
   it('cuts openings on a rotated wall in local coordinates',()=>{
     const w=wall({x:5,y:3,rotation:90});
@@ -69,5 +70,13 @@ describe('BIM editing geometry',()=>{
     const e=createDrawnElement(p,'slab',{x:5,y:7},{x:1,y:2},'level-0').element!;
     expect([e.x,e.y,e.width,e.depth]).toEqual([1,2,4,5]);expect(e.z+e.height).toBe(0);
     expect(createDrawnElement(p,'wall',{x:0,y:0},{x:.01,y:0},'level-0').element).toBeUndefined();
+  });
+  it('links invalid host bounds, alignment and missing-host issues to exact element IDs',()=>{
+    const project=createBlankProject('Invalid openings'),w=wall();
+    const opening={...w,id:'win',name:'Outside window',kind:'window' as const,hostId:w.id,x:5.5,width:2,z:1,height:1};
+    project.elements=[w,opening];
+    expect(validateModelGeometry(project).find(issue=>issue.code==='opening-bounds')?.elementIds).toEqual(['w','win']);
+    opening.x=1;opening.rotation=45;expect(validateModelGeometry(project).some(issue=>issue.code==='opening-alignment')).toBe(true);
+    opening.hostId='absent';expect(validateModelGeometry(project).some(issue=>issue.code==='missing-host')).toBe(true);
   });
 });
