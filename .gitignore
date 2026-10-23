@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env*
+!.env.example
+work/
+*.log
+.DS_Store
+server/data/
+
+.desktop/
+*.tsbuildinfo
+outputs/Atelier.app/
+outputs/*.zip
+
+outputs/
+coverage/
+.release/
