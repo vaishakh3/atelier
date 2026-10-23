@@ -1,4 +1,6 @@
-# Atelier BIM — desktop implementation notes
+# Atelier BIM — initial desktop implementation notes
+
+> Historical 0.1.0 pilot evidence. The current 0.2.0 implementation and release status are documented in [VALIDATION.md](VALIDATION.md), [PRD_ACCEPTANCE.md](PRD_ACCEPTANCE.md) and [desktop release operations](../desktop/RELEASE.md). Security and feature limitations below describe the earlier pilot, not the current build.
 
 This delivery targets a standalone macOS Apple Silicon application built with Electron and an embedded Express service. It implements an initial modelling → reviewed AI change → quantity/estimate → construction schedule → scenario comparison workflow from the PRD, with bounded geometry and IFC support. It is a local pilot prototype; the full production PRD remains incomplete.
 

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, symlink, writeFile }
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {pathToFileURL} from 'node:url';
 import { createDiagnosticLogger, redactDiagnostic } from '../desktop/diagnostics';
 import { getOrCreateDataKey, getProfileDataKey, loadApiCredential, removeApiCredential, saveApiCredential, validateApiKey, validateModel } from '../desktop/secure-store';
 import type { SecureStorageAdapter } from '../desktop/secure-store';
@@ -117,6 +118,11 @@ describe('legacy plaintext draft preservation',()=>{
  });
 });
 describe('release third-party notice preservation',()=>{
+ it('uses native nested ASAR paths on Windows and POSIX without accepting absolute or traversal paths',async()=>{
+  const module=pathToFileURL(path.join(process.cwd(),'scripts','asar-paths.mjs')).href,run=promisify(execFile);
+  const program=`import assert from 'node:assert/strict';import path from 'node:path';import {archiveEntryPath} from ${JSON.stringify(module)};const entry='third-party-licenses/@babel_runtime@7.29.10-b0d8c4c3/LICENSE';assert.equal(archiveEntryPath(entry,path.win32),path.win32.join('third-party-licenses','@babel_runtime@7.29.10-b0d8c4c3','LICENSE'));assert.equal(archiveEntryPath(entry,path.posix),entry);for(const invalid of ['/absolute','C:\\\\absolute','third-party-licenses/../secret','relative//empty'])assert.throws(()=>archiveEntryPath(invalid,path.win32));`;
+  await expect(run(process.execPath,['--input-type=module','--eval',program])).resolves.toMatchObject({stderr:''});
+ });
  it('preserves exact runtime LICENSE and NOTICE bytes, includes Electron, and detects modified output',async()=>{
   const root=await temporary(),output=path.join(root,'release'),copyright='Copyright Example Author\r\nMIT license body\n',notice='Retain this original notice.\n';
   const packages={'node_modules/example':{version:'1.2.3',license:'MIT'},'node_modules/electron':{version:'45.0.0',dev:true,license:'MIT'},'node_modules/build-only':{version:'1.0.0',dev:true}};

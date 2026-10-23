@@ -8,13 +8,15 @@ On October 24, 2026, the local source run completed:
 
 | Check | Recorded result |
 |---|---|
-| `npm test -- --reporter=dot` | **170 tests passed across 17 files**, Vitest 5.0.5 |
+| Full automated suite | **205 tests passed across 22 files**, Vitest 5.0.5 |
 | `npm run typecheck` | Passed |
+| Dependency advisory audit | **0 reported vulnerabilities** at this checkpoint; advisories can change after the run |
 | PDF and workbook regressions | Passed using jsPDF 4.2.1 and the official SheetJS 0.20.3 package |
-| Sequencing addition after that checkpoint | 43 engine/sequencing tests passed, including seven new baseline-bound sequencing tests; final full suite rerun pending |
+| Approved sequencing | Seven baseline-bound sequencing tests included; locks, cycles, stale approval and the disclosed search cap covered |
 | Desktop 0.2.0 package checkpoint | macOS arm64 ASAR inspection passed (161 runtime packages, 178 preserved notice/license files); strict deep local ad-hoc signature verification passed; 14 isolated packaged smoke checks passed, exit 0. Final UI changes require a rebuild and fresh integration check. |
 | Final production frontend/desktop build and package verification | Pending the final integration run after the UI changes; do not infer it from the package checkpoint above |
-| Final live provider/UI repetition and portable read-only review workflow | Implemented with automated coverage; packaged integration confirmation pending |
+| Native live provider/UI checkpoint | Live two-room repetition preview preserved 43 elements at v1; acceptance produced 45/v2; undo restored 43/v3. Published immutable v3 and reopened its read-only review file. Final distribution rebuild pending. |
+| Native report checkpoint | PDF: all 16 rendered pages visually inspected without overlap, clipping or broken glyphs. XLSX: eight sheets parsed; Rooms 8, Doors 7, Windows 10 data rows. |
 
 The count is a recorded checkpoint, not a promise that later source edits were included. Update this table with the final integration results before shipping the new artifacts.
 
@@ -29,6 +31,7 @@ The suites exercise:
 - Authenticated at-rest encryption, recovery generations, corruption failures and security-state rollback prevention.
 - OS-protected storage adapters, credential-bridge authorization, redacted diagnostics and signed update-feed validation.
 - Portable review-copy schema, detached snapshot/comment scope and checksum changes.
+- Ten allowlisted local usage aggregates, encrypted persistence, concurrency/overflow bounds, input-field rejection, project membership and administrator-only diagnostics.
 
 OS credential adapter tests use controlled adapters. A controlled-adapter test does not validate the user's actual Keychain/DPAPI/Secret Service state. Update-feed unit tests do not establish a hosted feed, publisher signing identity, notarization or a successfully installed update.
 
@@ -88,7 +91,19 @@ An additional independently hand-authored straight L-profile regression verifies
 
 The earlier local pilot demonstrated packaged launch, native settings, save/quit/reopen on a new ephemeral port, IFC import/undo, project JSON copy, parsed PDF/XLSX and a successful live window-replacement preview without persistent edits. That evidence predates the new identity/encryption/repetition/review-package changes and must not be presented as final verification of this hardened build.
 
-Before publishing the new artifact, record the actual packaged run for:
+The October 24 native 0.2.0 integration checkpoint added the following observed workflows. These results apply to the tested build; a final rebuild remains necessary after the latest integration changes.
+
+| Native checkpoint | Recorded outcome |
+|---|---|
+| Live AI repeated modelling | A provider-generated two-room preview left the source at 43 elements/v1. Explicit acceptance created 45 elements/v2. Undo restored 43 elements/v3. |
+| Immutable review snapshot | Published v3. The exported read-only review copy reopened successfully with its verified checksum, 43 elements and v3 metadata. |
+| Native PDF export | `work/desktop-qa-artifacts/courtyard-house-review-v3.pdf`, 16 pages. Every page was visually inspected from its 1,100-pixel render: title/footer/version/units, plan/section/elevation, room/door/window tables, continued tables, quantities, cost/rate provenance, schedule and assumptions had no observed overlap, clipping, black squares or broken glyphs. |
+| PDF content | v3, 43 elements, two levels, known estimated scope INR 3,070,492, 90% entered-scope completeness and 57 calendar days. Unknown allowance and missing specifications remain explicitly visible. |
+| Native workbook export | Parsed eight sheets: Project, Quantities, Estimate, Rooms, Doors, Windows, Schedule and Assumptions; 8 room, 7 door and 10 window data rows. |
+
+PDF inspection confirms this fixture's layout, not all future names, page sizes or project content. The review-copy checksum detects changed bytes; it does not authenticate a publisher. Native acceptance/undo evidence is one task, not the PRD's statistical AI-correctness pilot.
+
+Before publishing the final rebuilt artifact, rerun or record the remaining final-artifact checks for:
 
 1. Owner setup/login/logout, project membership roles, expired-session recovery and workspace-admin credential setup through the OS protector or explicitly selected external env file.
 2. Save/quit/reopen, stale-writer conflict, encrypted per-user recovery, verified portable backup/restore and old plaintext-cache preservation/cleanup.
