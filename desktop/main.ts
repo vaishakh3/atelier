@@ -16,6 +16,7 @@ import { validateUpdateConfig, verifySignedUpdateFeed } from './updates';
 import type { TrustedUpdateConfig } from './updates';
 import { assertWorkspaceAdministrator } from './authorization';
 import { preserveLegacyLocalStorage } from './legacy-storage';
+import { assertDesktopBackendReady, DesktopStartupError } from './backend-readiness';
 
 app.setName('Atelier');
 app.setAboutPanelOptions({applicationName:'Atelier',applicationVersion:app.getVersion(),copyright:'Atelier BIM',credits:'A standalone BIM workspace for architects and planners.'});
@@ -127,6 +128,7 @@ async function runSmoke(token:string){
   const renderer=await current.webContents.executeJavaScript("(async()=>{const info=await window.atelierDesktop.getInfo();let credentialIpcDenied=false;try{await window.atelierDesktop.configureApiKey({apiKey:''});}catch(error){credentialIpcDenied=String(error?.message||error).includes('signed-in workspace administrator');}return{credentialIpcDenied,nodeUnavailable:typeof require==='undefined'&&typeof process==='undefined',hasBridge:typeof window.atelierDesktop.configureApiKey==='function'&&typeof window.atelierDesktop.chooseEnvFile==='function',renderedApp:!!document.querySelector('#root')?.children.length,bridgeInfoValid:info.storageEncrypted===true&&typeof info.model==='string'&&!('apiKey'in info)&&!('encryptionKey'in info)}})()");
   const untrusted=await fetch(`${origin}/api/health`);const trusted=await fetch(`${origin}/api/health`,{headers:{'X-Atelier-Desktop':token}});
   const health=await trusted.json() as{encrypted?:boolean;identityRequired?:boolean};
+  const rendererIdentityReady=await current.webContents.executeJavaScript("(async()=>{try{const response=await fetch('/api/auth/status',{credentials:'same-origin'});const status=await response.json();return response.ok&&status.identityRequired===true&&typeof status.setupRequired==='boolean'&&typeof status.authenticated==='boolean'&&!document.body.textContent.includes('Workspace unavailable');}catch{return false;}})()");
   const protectedProjects=await fetch(`${origin}/api/projects`,{headers:{'X-Atelier-Desktop':token}});
   const roleAssignment=await fetch(`${origin}/api/session`,{method:'POST',headers:{'X-Atelier-Desktop':token,'Content-Type':'application/json'},body:JSON.stringify({role:'admin'})});
   let fixtureAuthenticated=true;
@@ -137,7 +139,7 @@ async function runSmoke(token:string){
     const cookie=response.headers.get('set-cookie')?.split(';')[0];
     fixtureAuthenticated=response.ok&&!!cookie&&(await fetch(`${origin}/api/projects`,{headers:{'X-Atelier-Desktop':token,Cookie:cookie||''}})).status===200;
   }
-  const result={...renderer,contextIsolationConfigured:rendererSecurity.contextIsolation,sandboxConfigured:rendererSecurity.sandbox,loopbackProtected:untrusted.status===403,backendReady:trusted.status===200,encryptedStorage:health.encrypted===true,identityRequired:health.identityRequired===true,anonymousDenied:protectedProjects.status===401,roleAssignmentBlocked:roleAssignment.status===409,fixtureAuthenticated,packaged:app.isPackaged};
+  const result={...renderer,rendererIdentityReady,contextIsolationConfigured:rendererSecurity.contextIsolation,sandboxConfigured:rendererSecurity.sandbox,loopbackProtected:untrusted.status===403,backendReady:trusted.status===200,encryptedStorage:health.encrypted===true,identityRequired:health.identityRequired===true,anonymousDenied:protectedProjects.status===401,roleAssignmentBlocked:roleAssignment.status===409,fixtureAuthenticated,packaged:app.isPackaged};
   console.log(`ATELIER_DESKTOP_SMOKE ${JSON.stringify(result)}`);
   const ok=Object.entries(result).filter(([key])=>key!=='packaged').every(([,value])=>value===true);
   allowQuit=true;allowClose=true;current.destroy();server?.close();app.exit(ok?0:1);
@@ -167,6 +169,7 @@ else{
     desktopSession.webRequest.onBeforeRequest({urls:['<all_urls>']},(details,callback)=>callback({cancel:!ownUrl(details.url)&&!details.url.startsWith('data:')&&!details.url.startsWith(`blob:${origin}/`)}));
     desktopSession.webRequest.onBeforeSendHeaders({urls:[`${origin}/*`]},(details,callback)=>{const headers=Object.fromEntries(Object.entries(details.requestHeaders).filter(([key])=>key.toLowerCase()!=='x-atelier-desktop'));callback({requestHeaders:{...headers,'X-Atelier-Desktop':token}});});
     desktopSession.on('will-download',(_event,item,contents)=>{if(!window||contents!==window.webContents){item.cancel();return;}const filename=path.basename(item.getFilename())||'Atelier export';item.setSaveDialogOptions({title:'Save Atelier Export',defaultPath:path.join(app.getPath('downloads'),filename),buttonLabel:'Save',properties:['showOverwriteConfirmation']});});
+    try{await assertDesktopBackendReady(origin,token);}catch(error){if(error instanceof DesktopStartupError)startupFailureDetail=error.message;throw error;}
     await prepareUpdates(configuration.updates);installIpc();installMenu();createWindow();void log('desktop-ready',{version:app.getVersion(),platform:process.platform,encrypted:true});console.log('Atelier desktop backend is ready.');
     if(updateConfiguration&&!smokeTest)void checkTrustedUpdates();
     if(smokeTest)await runSmoke(token);

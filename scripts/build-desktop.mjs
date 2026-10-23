@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateThirdPartyNotices, verifyThirdPartyNotices } from './third-party-notices.mjs';
+import {selectMacSigning,verifyLocalSignature} from './local-signing.mjs';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),require=createRequire(import.meta.url);
 const args=new Set(process.argv.slice(2)),buildRoot=path.join(root,'work','desktop-build'),stage=path.join(buildRoot,'app');
@@ -59,8 +60,10 @@ const updateConfiguration=process.env.ATELIER_UPDATE_FEED_URL&&process.env.ATELI
 if(updateConfiguration){const feed=new URL(updateConfiguration.feedUrl);if(!updateConfiguration.publicKey.startsWith('-----BEGIN PUBLIC KEY-----')||createPublicKey(updateConfiguration.publicKey).asymmetricKeyType!=='ed25519'||feed.protocol!=='https:'||feed.username||feed.password||feed.hash||[...feed.searchParams.keys()].some(key=>/token|secret|password|api.?key/i.test(key)))throw new Error('Updates require a public HTTPS feed and an Ed25519 public key; credentials and private keys must never be packaged.');}
 await writeFile(path.join(stage,'desktop-config.json'),JSON.stringify({updates:updateConfiguration},null,2));
 const macIdentity=process.env.ATELIER_MAC_SIGN_IDENTITY,windowsCertificate=process.env.WINDOWS_CERTIFICATE_FILE;
-const signing=targetPlatform==='darwin'?(macIdentity?'developer-id':'ad-hoc'):targetPlatform==='win32'&&windowsCertificate?'authenticode':'unsigned';
-const releaseMetadata={format:1,version:metadata.version,platform:targetPlatform,arch:targetArch,identityRequired:true,storage:'aes-256-gcm/os-protected-key',signing,createdAt:new Date().toISOString()};
+const macSigning=args.has('--package')?await selectMacSigning({targetPlatform,productionIdentity:macIdentity,requireLocal:process.env.ATELIER_MAC_LOCAL_SIGNING==='1',entitlements:path.join(root,'desktop','entitlements.plist')}):{signing:'ad-hoc',options:{}};
+try{
+const signing=targetPlatform==='darwin'?macSigning.signing:targetPlatform==='win32'&&windowsCertificate?'authenticode':'unsigned';
+const releaseMetadata={format:1,version:metadata.version,platform:targetPlatform,arch:targetArch,identityRequired:true,storage:'aes-256-gcm/os-protected-key',signing,...(macSigning.identity?{localSigningCertificateSha1:macSigning.identity}:{}),createdAt:new Date().toISOString()};
 await writeFile(path.join(stage,'release-metadata.json'),JSON.stringify(releaseMetadata,null,2));
 if(process.platform==='darwin'&&existsSync('/usr/bin/swift')){
  await run('/usr/bin/swift',[path.join(root,'desktop','create-icon.swift'),path.join(buildRoot,'Atelier.iconset')]);
@@ -73,13 +76,17 @@ console.log(`Desktop runtime prepared at ${stage}. No credential files were copi
 if(args.has('--package')){
  const {packager}=await import('@electron/packager');
  await officialElectronZip();
- const platformSigning=targetPlatform==='darwin'&&macIdentity?{osxSign:{identity:macIdentity,optionsForFile:()=>({hardenedRuntime:true,entitlements:path.join(root,'desktop','entitlements.plist')})},...(process.env.ATELIER_NOTARY_KEYCHAIN_PROFILE?{osxNotarize:{keychainProfile:process.env.ATELIER_NOTARY_KEYCHAIN_PROFILE}}:process.env.APPLE_ID&&process.env.APPLE_APP_SPECIFIC_PASSWORD&&process.env.APPLE_TEAM_ID?{osxNotarize:{appleId:process.env.APPLE_ID,appleIdPassword:process.env.APPLE_APP_SPECIFIC_PASSWORD,teamId:process.env.APPLE_TEAM_ID}}:{})}:targetPlatform==='win32'&&windowsCertificate?{windowsSign:{certificateFile:windowsCertificate,certificatePassword:process.env.WINDOWS_CERTIFICATE_PASSWORD,timestampServer:process.env.WINDOWS_TIMESTAMP_SERVER||'http://timestamp.digicert.com'}}:{};
+ const platformSigning=targetPlatform==='darwin'?{...macSigning.options,...(macIdentity?(process.env.ATELIER_NOTARY_KEYCHAIN_PROFILE?{osxNotarize:{keychainProfile:process.env.ATELIER_NOTARY_KEYCHAIN_PROFILE}}:process.env.APPLE_ID&&process.env.APPLE_APP_SPECIFIC_PASSWORD&&process.env.APPLE_TEAM_ID?{osxNotarize:{appleId:process.env.APPLE_ID,appleIdPassword:process.env.APPLE_APP_SPECIFIC_PASSWORD,teamId:process.env.APPLE_TEAM_ID}}:{}):{})}:targetPlatform==='win32'&&windowsCertificate?{windowsSign:{certificateFile:windowsCertificate,certificatePassword:process.env.WINDOWS_CERTIFICATE_PASSWORD,timestampServer:process.env.WINDOWS_TIMESTAMP_SERVER||'http://timestamp.digicert.com'}}:{};
  const packaged=await packager({dir:stage,out:path.join(buildRoot,'packaged'),overwrite:true,name:'Atelier',executableName:'Atelier',platform:targetPlatform,arch:targetArch,electronVersion:electronMetadata.version,electronZipDir:buildRoot,appVersion:metadata.version,appBundleId:'com.atelier.bim',appCategoryType:'public.app-category.graphics-design',darwinDarkModeSupport:true,asar:true,prune:false,...platformSigning,...(targetPlatform==='darwin'&&existsSync(path.join(stage,'desktop-runtime','atelier.icns'))?{icon:path.join(stage,'desktop-runtime','atelier.icns')}:{})});
  const candidate=targetPlatform==='darwin'?path.join(packaged[0],'Atelier.app'):packaged[0];
+ // Packager can warn instead of rejecting a failed signing pass. Verify before
+ // replacing the last deliverable, then verify the copied bundle again below.
+ if(macSigning.signing==='local-development')await verifyLocalSignature(candidate,macSigning.identity);
  const artifactName=targetPlatform==='darwin'?(targetArch===process.arch&&process.platform==='darwin'?'Atelier.app':`Atelier-${targetPlatform}-${targetArch}.app`):`Atelier-${targetPlatform}-${targetArch}`;
  const destination=path.join(root,'outputs',artifactName);
  await mkdir(path.dirname(destination),{recursive:true});await rm(destination,{recursive:true,force:true});await cp(candidate,destination,{recursive:true,preserveTimestamps:true,verbatimSymlinks:true});
- if(targetPlatform==='darwin'&&process.platform==='darwin'&&!macIdentity)await run('/usr/bin/codesign',['--force','--deep','--sign','-',destination]);
+ if(targetPlatform==='darwin'&&process.platform==='darwin'&&macSigning.signing==='ad-hoc')await run('/usr/bin/codesign',['--force','--deep','--sign','-',destination]);
+ if(macSigning.signing==='local-development')await verifyLocalSignature(destination,macSigning.identity);
  await run(process.execPath,[path.join(root,'scripts','verify-desktop-package.mjs'),destination]);
  const archive=path.join(root,'outputs',`Atelier-${metadata.version}-${targetPlatform}-${targetArch}.zip`);await rm(archive,{force:true});
  if(process.platform==='darwin')await run('/usr/bin/ditto',['-c','-k','--sequesterRsrc','--keepParent',destination,archive]);
@@ -93,3 +100,4 @@ if(args.has('--run')){
  const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
  await run(await developmentElectron(),[stage,...(args.has('--smoke-test')?['--smoke-test']:[])],{env});
 }
+}finally{await macSigning.lock?.().catch(()=>{});}

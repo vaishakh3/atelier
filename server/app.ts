@@ -60,7 +60,7 @@ export function createApp(options:AppOptions={}){
     if(req.headers['sec-fetch-site']==='cross-site')return res.status(403).json({error:'Cross-site requests are not allowed'});
     if(req.method==='OPTIONS'){res.setHeader('Access-Control-Allow-Methods','GET,POST,PUT,DELETE,OPTIONS');res.setHeader('Access-Control-Allow-Headers','Content-Type, If-Match, X-Atelier-Desktop');return res.sendStatus(204);}next();
   });
-  app.use(express.json({limit:'25mb'}));app.use('/api',async(_req,_res,next)=>{await initialize();next();});
+  app.use(express.json({limit:'25mb'}));app.use('/api',async(_req,_res,next)=>{const pending=initialize();try{await pending;}catch(error){if(initialization===pending)initialization=null;throw error;}next();});
   const cookie=(req:express.Request)=>req.headers.cookie?.split(';').map(c=>c.trim()).find(c=>c.startsWith('atelier_session='))?.slice('atelier_session='.length);
   const localSession=(req:express.Request)=>{const token=cookie(req),entry=token&&sessions.get(token);return entry&&entry.expires>Date.now()?entry:undefined;};
   const issue=(res:express.Response,token:string)=>res.cookie('atelier_session',token,{httpOnly:true,sameSite:'strict',secure:false,maxAge:12*60*60*1000,path:'/'});

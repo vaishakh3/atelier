@@ -26,6 +26,14 @@ async function createMember(owner:Client,email='planner@example.test',isAdmin=fa
 async function login(client:Client,email='planner@example.test',credential=password){return client.request('/api/auth/login','POST',{email,password:credential});}
 
 describe('real local identity and project authorization',()=>{
+ it('allows an explicit startup retry after a migration input is repaired without weakening account checks',async()=>{
+  const directory=await mkdtemp(path.join(tmpdir(),'atelier-retry-')),project=createDemoProject(),file=path.join(directory,`${project.id}.json`);
+  await writeFile(file,'malformed');const app=await launch(directory);
+  const failed=await app.owner.request('/api/auth/status');expect(failed.status).toBe(503);expect((await failed.json()).code).toBe('MIGRATION_FAILED');
+  await writeFile(file,JSON.stringify({project,versions:[],comments:[]}));
+  const retried=await app.owner.request('/api/auth/status');expect(retried.status).toBe(200);expect(await retried.json()).toMatchObject({identityRequired:true,setupRequired:true,authenticated:false});
+  expect((await app.owner.request('/api/projects')).status).toBe(401);
+ });
  it('requires owner setup, removes role impersonation and persists only encrypted account material',async()=>{
   const app=await launch(),before=await(await app.owner.request('/api/auth/status')).json();expect(before).toMatchObject({identityRequired:true,setupRequired:true,authenticated:false,user:null});expect((await app.owner.request('/api/projects')).status).toBe(401);expect((await app.owner.request('/api/session','POST',{role:'admin'})).status).toBe(409);
   const owner=await app.setup();expect(owner.isAdmin).toBe(true);expect(owner).not.toHaveProperty('passwordHash');const status=await(await app.owner.request('/api/auth/status')).json();expect(status.authenticated).toBe(true);expect(status.setupRequired).toBe(false);expect((await app.owner.request('/api/auth/setup','POST',{name:'Other',email:'other@example.test',password})).status).toBe(409);

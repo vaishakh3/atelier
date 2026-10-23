@@ -1,10 +1,25 @@
 import {createCipheriv,createDecipheriv,createHash,randomBytes,scrypt as scryptCallback,timingSafeEqual} from 'node:crypto';
-import {copyFile,mkdir,open,readFile,readdir,rename,rm,stat} from 'node:fs/promises';
+import {lstat,mkdir,open,readFile,readdir,rename,rm,stat} from 'node:fs/promises';
 import path from 'node:path';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {ApiError} from './errors';
 
 const MAX_RECORD_BYTES=128*1024*1024;
+const MAX_LEGACY_FILES=512,MAX_LEGACY_IMPORTS=1024;
+interface LegacyRecord {project:{id:string;version?:number;name?:string;createdAt?:string;updatedAt?:string;audit?:Record<string,unknown>[];elements?:{id:string}[];[key:string]:unknown};versions?:{id:string;actor?:string;label?:string;project:LegacyRecord['project'];[key:string]:unknown}[];comments?:{id:string;versionId:string;author?:string;authorId?:string;role?:string;[key:string]:unknown}[];members?:Record<string,unknown>;[key:string]:unknown}
+interface LegacyImport {format:'atelier.legacy-import.v1';sourceProjectId:string;contentHash:string;recoveredProjectId:string;importedAt:string;complete:boolean}
+const stable=(value:unknown):string=>Array.isArray(value)?'['+value.map(stable).join(',')+']':value&&typeof value==='object'?'{'+Object.entries(value).filter(([,item])=>item!==undefined).sort(([a],[b])=>a<b?-1:a>b?1:0).map(([key,item])=>JSON.stringify(key)+':'+stable(item)).join(',')+'}':JSON.stringify(value)??'null';
+const legacyContent=(record:LegacyRecord)=>{const {members:_,...content}=record;return stable(content);};
+function recoveredLegacyRecord(source:LegacyRecord,id:string,hash:string,importedAt:string):LegacyRecord {
+ const record=structuredClone(source),sourceId=record.project.id;
+ const history=(project:LegacyRecord['project'])=>({...project,id,...(project.audit?{audit:project.audit.map(entry=>({...entry,id:`audit-legacy-${digest(hash+'|'+String(entry.id)).slice(0,32)}`,actor:'Imported legacy history',action:`Unverified legacy attribution (${String(entry.actor??'unknown')}): ${String(entry.action??'')}`.slice(0,3000)}))}:{})});
+ record.project={...history(record.project),name:`${(record.project.name??'Project').slice(0,2950)} · recovered legacy copy`,createdAt:importedAt,updatedAt:importedAt};
+ if(record.project.audit)record.project.audit=[{id:`audit-legacy-recovery-${hash.slice(0,32)}`,actor:'System migration',timestamp:importedAt,action:`Recovered a conflicting legacy copy of ${sourceId}. Original encrypted project and access decisions were retained; imported history is unverified.`,affectedIds:record.project.elements?.map(element=>element.id)??[]},...record.project.audit.slice(0,19999)];
+ const versionIds=new Map((record.versions??[]).map(version=>[version.id,`version-legacy-${digest(hash+'|'+version.id).slice(0,32)}`]));
+ if(record.versions)record.versions=record.versions.map(version=>({...version,id:versionIds.get(version.id)!,actor:`Imported legacy: ${version.actor??'unknown'}`.slice(0,200),project:history(version.project)}));
+ if(record.comments)record.comments=record.comments.map(comment=>{const {authorId:_,role:__,...content}=comment;return{...content,id:`comment-legacy-${digest(hash+'|'+comment.id).slice(0,32)}`,versionId:versionIds.get(comment.versionId)??comment.versionId,author:`Imported legacy: ${comment.author??'unknown'}`.slice(0,200)};});
+ record.members={};return record;
+}
 export type KdfVersion=1|2;
 export const CURRENT_KDF_VERSION:KdfVersion=2;
 // v1 is read-only compatibility. v2 meets OWASP's scrypt minimum at 32 MiB.
@@ -64,18 +79,62 @@ export class RecordStore {
   async remove(record:string){return this.transaction(record,async()=>{await rm(this.filename(record),{force:true});await Promise.all((await this.generations(record)).map(name=>rm(path.join(this.directory,'.backups',name),{force:true})));});}
   async list(prefix=''){await mkdir(this.directory,{recursive:true,mode:0o700});const suffix=this.encrypted?'.atelier':'.json';return(await readdir(this.directory)).filter(name=>name.endsWith(suffix)).flatMap(name=>{try{const record=Buffer.from(name.slice(0,-suffix.length),'base64url').toString('utf8');return record.startsWith(prefix)&&safeRecord(record)===name.slice(0,-suffix.length)?[record]:[];}catch{return[];}});}
   async migrateLegacy(validate:(value:unknown)=>unknown){
-    await mkdir(this.directory,{recursive:true,mode:0o700});
-    for(const filename of(await readdir(this.directory)).filter(name=>/^[\w-]+\.json$/.test(name))){const file=path.join(this.directory,filename);
-      try{if((await stat(file)).size>MAX_RECORD_BYTES)throw new Error('Legacy record exceeds limit');const parsed=validate(JSON.parse(await readFile(file,'utf8')))as{project:{id:string;version:number}},record=`project:${parsed.project.id}`;if(filename!==`${parsed.project.id}.json`&&filename!==`${safeRecord(record)}.json`)continue;if(path.resolve(file)===path.resolve(this.filename(record)))continue;
-        try{const existing=await this.read(record)as{project:unknown};if(JSON.stringify(existing.project)!==JSON.stringify(parsed.project))throw new Error('Conflicting legacy project');}catch(error){if(!(error instanceof ApiError)||error.code!=='NOT_FOUND')throw error;await this.write(record,parsed);}
-        await this.read(record,validate);await rm(file);this.event('migrated',record);
-      }catch{throw new ApiError(503,'MIGRATION_FAILED','An existing project could not be safely migrated. Original data was kept; repair it before continuing.');}
-    }
-    if(this.encrypted){
-      const folder=path.join(this.directory,'.backups');let oldBackups:string[]=[];try{oldBackups=(await readdir(folder)).filter(name=>/\.json\..+\.bak$/.test(name));}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
-      for(const filename of oldBackups){try{const original=path.join(folder,filename),parsed=validate(JSON.parse(await readFile(original,'utf8')))as{project:{id:string}},record=`project:${parsed.project.id}`,suffix=filename.slice(filename.indexOf('.json.')+6),destination=path.join(folder,`${path.basename(this.filename(record))}.${suffix}`);const encoded=this.encode(record,parsed);this.decode(record,encoded,validate);await atomicWrite(destination,encoded);await rm(original);this.event('migrated',record);}catch{throw new ApiError(503,'MIGRATION_FAILED','A previous plaintext recovery generation could not be safely encrypted. Original data was kept; repair it before continuing.');}}
-      for(const record of await this.list('project:'))for(const name of(await this.generations(record)).slice(this.backupLimit))await rm(path.join(folder,name),{force:true});
-    }
+    return this.transaction('legacy-migration',async()=>{
+      await mkdir(this.directory,{recursive:true,mode:0o700});
+      const primaries=(await readdir(this.directory)).filter(name=>/^[\w-]+\.json$/.test(name)).sort();
+      let backups:string[]=[];if(this.encrypted)try{backups=(await readdir(path.join(this.directory,'.backups'))).filter(name=>/\.json\..+\.bak$/.test(name)).sort().reverse();}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      if(primaries.length+backups.length>MAX_LEGACY_FILES)throw new ApiError(503,'MIGRATION_FAILED','Legacy migration exceeds the supported 512-file batch. Original data was kept; use a verified offline recovery before continuing.');
+      const checked=(value:unknown):LegacyRecord=>{const parsed=validate(value)as LegacyRecord;if(!parsed?.project||typeof parsed.project.id!=='string'||!/^[A-Za-z0-9_-]{1,160}$/.test(parsed.project.id))throw new Error('Invalid legacy project identity');return parsed;};
+      const readOptional=async<T>(key:string,parser:(value:unknown)=>T):Promise<T|null>=>{try{return await this.read(key,parser,{recover:false});}catch(error){if(error instanceof ApiError&&error.code==='NOT_FOUND')return null;throw error;}};
+      const archive=async(name:string,raw:string)=>{
+        const contentHash=digest(raw),key=`legacy-source:${digest(name+'\0'+raw)}`,expected={format:'atelier.legacy-source.v1',sourceName:name,contentHash,content:raw};
+        if(!this.encrypted){const file=path.join(this.directory,'.legacy-sources',digest(name+'\0'+raw)+'.json'),bytes=JSON.stringify(expected);try{if(await readFile(file,'utf8')!==bytes)throw new Error('Legacy source archive mismatch');}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;await atomicWrite(file,bytes);}if(await readFile(file,'utf8')!==bytes)throw new Error('Legacy source archive verification failed');return;}
+        const verify=(value:unknown)=>{if(stable(value)!==stable(expected))throw new Error('Legacy source archive verification failed');return value;};
+        if(!await readOptional(key,verify))await this.write(key,expected);
+        await this.read(key,verify,{recover:false});
+      };
+      const preserveConflict=async(parsed:LegacyRecord)=>{
+        const contentHash=digest(legacyContent(parsed)),id=`project-legacy-${contentHash.slice(0,40)}`,key=`legacy-import:${contentHash}`,record=`project:${id}`;
+        await this.transaction(record,async()=>{
+          const markerParser=(value:unknown):LegacyImport=>{const marker=value as LegacyImport;if(!marker||marker.format!=='atelier.legacy-import.v1'||marker.sourceProjectId!==parsed.project.id||marker.contentHash!==contentHash||marker.recoveredProjectId!==id||typeof marker.importedAt!=='string'||marker.importedAt.length>100||!Number.isFinite(Date.parse(marker.importedAt))||typeof marker.complete!=='boolean')throw new Error('Legacy import marker verification failed');return marker;};
+          let marker=await readOptional(key,markerParser);
+          if(!marker){if((await this.list('legacy-import:')).length>=MAX_LEGACY_IMPORTS)throw new Error('Legacy recovery-copy limit exceeded');marker={format:'atelier.legacy-import.v1',sourceProjectId:parsed.project.id,contentHash,recoveredProjectId:id,importedAt:new Date().toISOString(),complete:false};await this.write(key,marker);}
+          const recovered=checked(recoveredLegacyRecord(parsed,id,contentHash,marker.importedAt)),existing=await readOptional(record,checked);
+          if(!existing)await this.write(record,recovered);
+          else if(!marker.complete&&stable(existing)!==stable(recovered))throw new Error('Conflicting legacy recovery identity');
+          const verified=await this.read(record,checked,{recover:false});
+          if(verified.project.id!==id||!marker.complete&&stable(verified)!==stable(recovered))throw new Error('Legacy recovery verification failed');
+          if(!marker.complete)await this.write(key,{...marker,complete:true});
+          await this.read(key,value=>{if(!markerParser(value).complete)throw new Error('Legacy recovery is incomplete');return value;},{recover:false});
+        });
+      };
+      const migrate=async(name:string,backup:boolean)=>{
+        const file=path.join(this.directory,name);
+        try{
+          // The explicitly unencrypted development store also contains encoded metadata
+          // records. They are not legacy projects. Production never skips plaintext records.
+          if(!backup&&!this.encrypted){const stem=name.slice(0,-5);try{const decoded=Buffer.from(stem,'base64url').toString('utf8');if(safeRecord(decoded)===stem&&!decoded.startsWith('project:'))return;}catch{/* A literal legacy project filename is checked below. */}}
+          const info=await lstat(file);if(!info.isFile()||info.size>MAX_RECORD_BYTES)throw new Error('Invalid or oversized legacy source');
+          const raw=await readFile(file,'utf8'),parsed=checked(JSON.parse(raw)),record=`project:${parsed.project.id}`;
+          if(!backup&&name!==`${parsed.project.id}.json`&&name!==`${safeRecord(record)}.json`)return;
+          if(path.resolve(file)===path.resolve(this.filename(record)))return;
+          // Schema defaults and object key order must not invent a data conflict.
+          // Never recover or replace existing encrypted canonical bytes from an old plaintext variant.
+          const existing=await readOptional(record,checked);
+          const protectedIdentity=!existing&&this.encrypted?await readOptional(`access:${parsed.project.id}`,value=>value):null;
+          await archive(name,raw);
+          if(existing){if(legacyContent(existing)!==legacyContent(parsed))await preserveConflict(parsed);}
+          else if(backup||protectedIdentity)await preserveConflict(parsed);
+          else{const migrated=structuredClone(parsed);if(Object.prototype.hasOwnProperty.call(migrated,'members'))migrated.members={};await this.write(record,checked(migrated));await this.read(record,checked,{recover:false});}
+          const after=await lstat(file);if(!after.isFile()||after.dev!==info.dev||after.ino!==info.ino||await readFile(file,'utf8')!==raw)throw new Error('Legacy source changed during migration');
+          await rm(file);this.event('migrated',record);
+        }catch{throw new ApiError(503,'MIGRATION_FAILED','An existing legacy project could not be safely preserved. Original data was kept; close older Atelier versions and repair or recover the source before continuing.');}
+      };
+      for(const name of primaries)await migrate(name,false);
+      // Plaintext generations are archived/recovered as distinct copies, never installed as
+      // canonical recovery generations that could roll a newer encrypted model backward.
+      for(const name of backups)await migrate(path.join('.backups',name),true);
+    });
   }
 }
 
