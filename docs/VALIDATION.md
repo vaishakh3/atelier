@@ -4,21 +4,23 @@ Evidence is separated into automated checks, measured synthetic performance, fin
 
 ## Current automated checks
 
-On October 24, 2026, the local source run completed:
+On October 24, 2026, the following checks completed. The final runtime source is commit `75939f71279234901502ae4996782fd681ce49d9`; subsequent release-evidence edits do not change the packaged application.
 
 | Check | Recorded result |
 |---|---|
-| Full automated suite | **205 tests passed across 22 files**, Vitest 5.0.5 |
+| Full automated suite | **206 tests passed across 22 files**, Vitest 5.0.5, in the final-source CI verification job. The preceding local full run passed 205 tests; the additional test covers portable ASAR paths on Windows/POSIX. |
 | `npm run typecheck` | Passed |
 | Dependency advisory audit | **0 reported vulnerabilities** at this checkpoint; advisories can change after the run |
 | PDF and workbook regressions | Passed using jsPDF 4.2.1 and the official SheetJS 0.20.3 package |
 | Approved sequencing | Seven baseline-bound sequencing tests included; locks, cycles, stale approval and the disclosed search cap covered |
-| Desktop 0.2.0 package checkpoint | macOS arm64 ASAR inspection passed (161 runtime packages, 178 preserved notice/license files); strict deep local ad-hoc signature verification passed; 14 isolated packaged smoke checks passed, exit 0. Final UI changes require a rebuild and fresh integration check. |
-| Final production frontend/desktop build and package verification | Pending the final integration run after the UI changes; do not infer it from the package checkpoint above |
-| Native live provider/UI checkpoint | Live two-room repetition preview preserved 43 elements at v1; acceptance produced 45/v2; undo restored 43/v3. Published immutable v3 and reopened its read-only review file. Final distribution rebuild pending. |
-| Native report checkpoint | PDF: all 16 rendered pages visually inspected without overlap, clipping or broken glyphs. XLSX: eight sheets parsed; Rooms 8, Doors 7, Windows 10 data rows. |
+| Final desktop 0.2.0 package | macOS arm64 ASAR inspection passed (161 runtime packages, 178 preserved notice/license files); strict deep local ad-hoc signature verification passed; all 14 isolated packaged smoke checks passed, exit 0. The package contains frontend `index-RZCG2hmD.js` and module worker `scenarios.worker-DffuKv35.js`. |
+| Final production build | TypeScript, Vite frontend, embedded service and Electron packaging passed. The final archive was checked for credential/private-data exclusion and expected ASAR contents. |
+| Cross-platform CI | [Run 40023883460](https://github.com/vaishakh3/atelier/actions/runs/40023883460) passed source verification and built/uploaded all four packages: macOS arm64, macOS x64, Windows x64 and Linux x64. This is build evidence; native workflow QA was performed on macOS arm64 only. |
+| Native final-artifact checks | Login, repeated save commands, quit/reopen, saved project/name/revision, worker scenario comparison, baseline revision comparison and native encrypted-backup restore passed. Restoring created a separate 43-element/v3 project; switching back retained the original 43-element/v4 project. |
+| Earlier 0.2.0 live provider/UI checkpoint | Live two-room repetition preview preserved 43 elements at v1; acceptance produced 45/v2; undo restored 43/v3. Published immutable v3 and reopened its read-only review file. These flows were observed before the final file-picker and persistence hardening, not all rerun against the final ZIP. |
+| Earlier 0.2.0 native report checkpoint | PDF: all 16 rendered pages visually inspected without overlap, clipping or broken glyphs. XLSX: eight sheets parsed; Rooms 8, Doors 7, Windows 10 data rows. |
 
-The count is a recorded checkpoint, not a promise that later source edits were included. Update this table with the final integration results before shipping the new artifacts.
+The locally verified `Atelier-0.2.0-darwin-arm64.zip` SHA-256 is `43e28cd00b5ab94b21df428b21a72c7a7ef1da4d8336cd0e47751a36b4fddea4`. CI archives are separate builds and have their own checksums. The local macOS signature is ad hoc; it is not an Apple Developer ID signature or notarization.
 
 The suites exercise:
 
@@ -35,7 +37,7 @@ The suites exercise:
 
 OS credential adapter tests use controlled adapters. A controlled-adapter test does not validate the user's actual Keychain/DPAPI/Secret Service state. Update-feed unit tests do not establish a hosted feed, publisher signing identity, notarization or a successfully installed update.
 
-The packaged smoke checkpoint separately exercised actual macOS protected storage, an isolated test identity, denied anonymous access, blocked role self-assignment, encrypted storage, capability protection, renderer Node isolation, sandbox/context isolation and administrator authorization for credential IPC. A guarded isolated fixture account is test setup, not a built-in production account. This checkpoint is stronger than an adapter test, but it still does not replace the final user workflow checks below.
+The final packaged smoke run separately exercised actual macOS protected storage, an isolated test identity, denied anonymous access, blocked role self-assignment, encrypted storage, capability protection, renderer Node isolation, sandbox/context isolation and administrator authorization for credential IPC. A guarded isolated fixture account is test setup, not a built-in production account. This is stronger than an adapter test, but it does not replace the professional and platform acceptance gates below.
 
 ## Reproducible synthetic performance measurement
 
@@ -71,7 +73,7 @@ The separate scenario run uses the same fixtures and runtime, one warm-up and th
 | No sequencing variants | 801.61 / 836.52 | 3,117.55 / 3,184.95 | 24 / 24 |
 | Six approved sequencing variants | 4,697.61 / 4,753.39 | 14,281.21 / 15,287.20 | 128 / 168, bounded cap reached |
 
-All six dependency variants enter the bounded search; the baseline is retained. The exact scratch report is `work/scenario-benchmark.json`. At this size, full comparison is a multi-second operation. The product runs it in a module worker with progress/error state; that separates computation from the UI thread but does not make these calculations instantaneous. Worker launch and interactive responsiveness still require packaged verification.
+All six dependency variants enter the bounded search; the baseline is retained. The exact scratch report is `work/scenario-benchmark.json`. At this size, full comparison is a multi-second operation. The product runs it in a module worker with progress/error state; that separates computation from the UI thread but does not make these calculations instantaneous. The final macOS package launched the worker and completed the demonstration's 24/24 combinations. This does not establish responsiveness for the 3,000-element benchmark in the native UI.
 
 These timings exclude Electron/React rendering, WebGL frame rate, picking, worker startup/message copying, native file dialogs, OS encryption, AI network latency, disks and professional review/correction. They do not establish an interactive 3,000-element product SLA, a memory ceiling or justify raising schema/import limits. Agree representative models, hardware and P95 editing thresholds with design partners, then measure those separately.
 
@@ -91,7 +93,7 @@ An additional independently hand-authored straight L-profile regression verifies
 
 The earlier local pilot demonstrated packaged launch, native settings, save/quit/reopen on a new ephemeral port, IFC import/undo, project JSON copy, parsed PDF/XLSX and a successful live window-replacement preview without persistent edits. That evidence predates the new identity/encryption/repetition/review-package changes and must not be presented as final verification of this hardened build.
 
-The October 24 native 0.2.0 integration checkpoint added the following observed workflows. These results apply to the tested build; a final rebuild remains necessary after the latest integration changes.
+The October 24 native 0.2.0 integration checkpoint added the following observed workflows. These provider/export/review observations preceded the final file-picker and persistence hardening. They are retained as integration evidence, rather than labelled as a complete rerun of every workflow from the final ZIP.
 
 | Native checkpoint | Recorded outcome |
 |---|---|
@@ -103,12 +105,16 @@ The October 24 native 0.2.0 integration checkpoint added the following observed 
 
 PDF inspection confirms this fixture's layout, not all future names, page sizes or project content. The review-copy checksum detects changed bytes; it does not authenticate a publisher. Native acceptance/undo evidence is one task, not the PRD's statistical AI-correctness pilot.
 
-Before publishing the final rebuilt artifact, rerun or record the remaining final-artifact checks for:
+The final macOS arm64 distribution additionally passed these native checks in an isolated profile:
 
-1. Owner setup/login/logout, project membership roles, expired-session recovery and workspace-admin credential setup through the OS protector or explicitly selected external env file.
-2. Save/quit/reopen, stale-writer conflict, encrypted per-user recovery, verified portable backup/restore and old plaintext-cache preservation/cleanup.
-3. Model edit and repeated hosted geometry preview/accept/undo; a live provider request must leave the source unchanged until accepted.
-4. Complete model schedules, revision comparison, PDF/XLSX/CSV/decision output and read-only review-copy opening without mutation of the active project.
-5. Actual package/archive secret and private-data scans, relative framework symlinks, local signature verification and current-host launch. Record target/OS results individually; build configuration alone does not mean Windows/Linux were run.
+| Final-artifact workflow | Recorded outcome |
+|---|---|
+| Login and persistence | Logged into the isolated test account, renamed the original project, issued overlapping native save commands and quit/reopened the application on a new ephemeral backend port. The name, 43 elements and v4 remained saved without a false revision conflict. |
+| Scenario worker | Compared all 24 configured combinations. The demonstration's 90% entered-scope cost completeness correctly prevented ranking/adoption as verified savings. No sequencing variants were configured in this native fixture. |
+| Revision comparison | Compared immutable baseline v3 with current v4: no element additions/removals/changes, zero known subtotal delta and zero schedule-day delta. The renamed project input remained visible; incomplete pricing was still disclosed. |
+| Native encrypted backup restore | The `.atelier-backup` file was selectable in the native macOS chooser with Open enabled. Its existing test passphrase decrypted the fixture, restoring a separate project with 43 elements/v3 and current-user administrator access. Switching back confirmed the original 43-element/v4 project was unchanged. |
+| Package boundary | The final archive passed ASAR, runtime-license hash, credential/private-data exclusion, relative framework-link, strict deep ad-hoc signature and isolated smoke verification. |
+
+During integration, an explicitly selected existing `.env.local` file configured live AI through the native picker. Only its path was retained; the key was not displayed or copied into the package. The production profile remains first-time setup, with no built-in account. Account creation, membership handover, expired-session recovery, stale-writer conflict, crash/corruption recovery and legacy-cache migration have automated coverage; they have not all received a complete final-artifact native GUI drill. Native Windows/Linux/Intel macOS workflows, formal accessibility evaluation and independent recovery drills remain acceptance work.
 
 Developer ID signing, notarization, Windows signing and trusted update deployment require publisher credentials/infrastructure. Independent BIM/QS/planner tolerances and the PRD's 3–5 firm pilot remain external acceptance gates. See [PRD_ACCEPTANCE.md](PRD_ACCEPTANCE.md) for the full distinction between implemented behaviour and those outcomes.
