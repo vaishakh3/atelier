@@ -25,7 +25,9 @@ const isolatedTestProfile=process.env.ATELIER_TEST_MODE==='1'&&!!process.env.ATE
 if(isolatedTestProfile)app.setPath('userData',process.env.ATELIER_PROFILE_DIR!);
 const smokeTest=process.argv.includes('--smoke-test');
 const rendererSecurity={contextIsolation:true,sandbox:true,nodeIntegration:false} as const;
-const productionPartition='persist:atelier-production';
+// Backend sessions are process-local. Persisting browser cookies cannot preserve
+// login, and needlessly initializes Chromium's separate Keychain encryptor.
+const productionPartition='atelier-production-session';
 let window:BrowserWindow|null=null,server:Server|null=null,origin='',dataPath='',allowClose=false,allowQuit=false,quitRequested=false,closing=false,closeDialogOpen=false;
 let closeTimer:ReturnType<typeof setTimeout>|undefined;
 let keySource:DesktopInfo['keySource']='none',storageEncrypted=false,updateStatus:DesktopInfo['updateStatus']='disabled',updateReady=false,pendingUpdate=false;
@@ -131,15 +133,16 @@ async function runSmoke(token:string){
   const rendererIdentityReady=await current.webContents.executeJavaScript("(async()=>{try{const response=await fetch('/api/auth/status',{credentials:'same-origin'});const status=await response.json();return response.ok&&status.identityRequired===true&&typeof status.setupRequired==='boolean'&&typeof status.authenticated==='boolean'&&!document.body.textContent.includes('Workspace unavailable');}catch{return false;}})()");
   const protectedProjects=await fetch(`${origin}/api/projects`,{headers:{'X-Atelier-Desktop':token}});
   const roleAssignment=await fetch(`${origin}/api/session`,{method:'POST',headers:{'X-Atelier-Desktop':token,'Content-Type':'application/json'},body:JSON.stringify({role:'admin'})});
-  let fixtureAuthenticated=true;
+  let fixtureAuthenticated=true,fixtureRendererAuthenticated=true;
   if(isolatedTestProfile&&process.env.ATELIER_TEST_PASSWORD){
     const status=await fetch(`${origin}/api/auth/status`,{headers:{'X-Atelier-Desktop':token}}).then(response=>response.json()) as{setupRequired:boolean};
     const endpoint=status.setupRequired?'setup':'login';
     const response=await fetch(`${origin}/api/auth/${endpoint}`,{method:'POST',headers:{'X-Atelier-Desktop':token,'Content-Type':'application/json'},body:JSON.stringify({email:'qa@atelier.test',password:process.env.ATELIER_TEST_PASSWORD,...(status.setupRequired?{name:'Isolated QA fixture'}:{})})});
     const cookie=response.headers.get('set-cookie')?.split(';')[0];
     fixtureAuthenticated=response.ok&&!!cookie&&(await fetch(`${origin}/api/projects`,{headers:{'X-Atelier-Desktop':token,Cookie:cookie||''}})).status===200;
+    fixtureRendererAuthenticated=await current.webContents.executeJavaScript(`(async()=>{const login=await fetch('/api/auth/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(${JSON.stringify({email:'qa@atelier.test',password:process.env.ATELIER_TEST_PASSWORD})})});const status=await fetch('/api/auth/status',{credentials:'same-origin'}).then(r=>r.json());const projects=await fetch('/api/projects',{credentials:'same-origin'});return login.ok&&status.authenticated===true&&projects.ok&&!document.cookie.includes('atelier_session=');})()`);
   }
-  const result={...renderer,rendererIdentityReady,contextIsolationConfigured:rendererSecurity.contextIsolation,sandboxConfigured:rendererSecurity.sandbox,loopbackProtected:untrusted.status===403,backendReady:trusted.status===200,encryptedStorage:health.encrypted===true,identityRequired:health.identityRequired===true,anonymousDenied:protectedProjects.status===401,roleAssignmentBlocked:roleAssignment.status===409,fixtureAuthenticated,packaged:app.isPackaged};
+  const result={...renderer,rendererIdentityReady,browserSessionEphemeral:!current.webContents.session.isPersistent()&&current.webContents.session.storagePath===null,contextIsolationConfigured:rendererSecurity.contextIsolation,sandboxConfigured:rendererSecurity.sandbox,loopbackProtected:untrusted.status===403,backendReady:trusted.status===200,encryptedStorage:health.encrypted===true,identityRequired:health.identityRequired===true,anonymousDenied:protectedProjects.status===401,roleAssignmentBlocked:roleAssignment.status===409,fixtureAuthenticated,fixtureRendererAuthenticated,packaged:app.isPackaged};
   console.log(`ATELIER_DESKTOP_SMOKE ${JSON.stringify(result)}`);
   const ok=Object.entries(result).filter(([key])=>key!=='packaged').every(([,value])=>value===true);
   allowQuit=true;allowClose=true;current.destroy();server?.close();app.exit(ok?0:1);
@@ -170,7 +173,7 @@ else{
     desktopSession.webRequest.onBeforeSendHeaders({urls:[`${origin}/*`]},(details,callback)=>{const headers=Object.fromEntries(Object.entries(details.requestHeaders).filter(([key])=>key.toLowerCase()!=='x-atelier-desktop'));callback({requestHeaders:{...headers,'X-Atelier-Desktop':token}});});
     desktopSession.on('will-download',(_event,item,contents)=>{if(!window||contents!==window.webContents){item.cancel();return;}const filename=path.basename(item.getFilename())||'Atelier export';item.setSaveDialogOptions({title:'Save Atelier Export',defaultPath:path.join(app.getPath('downloads'),filename),buttonLabel:'Save',properties:['showOverwriteConfirmation']});});
     try{await assertDesktopBackendReady(origin,token);}catch(error){if(error instanceof DesktopStartupError)startupFailureDetail=error.message;throw error;}
-    await prepareUpdates(configuration.updates);installIpc();installMenu();createWindow();void log('desktop-ready',{version:app.getVersion(),platform:process.platform,encrypted:true});console.log('Atelier desktop backend is ready.');
+    await prepareUpdates(configuration.updates);installIpc();installMenu();createWindow();void log('desktop-ready',{version:app.getVersion(),platform:process.platform,encrypted:true,browserSessionPersistent:desktopSession.isPersistent()});console.log('Atelier desktop backend is ready.');
     if(updateConfiguration&&!smokeTest)void checkTrustedUpdates();
     if(smokeTest)await runSmoke(token);
   }).catch(async error=>{await log('desktop-start-failed',{message:error instanceof Error?error.message:'Unknown startup failure'});if(!smokeTest)dialog.showErrorBox('Atelier could not start',startupFailureDetail||'The desktop workspace could not start. Unlock the operating system secure credential store and confirm that the application data folder is writable. Existing encrypted projects have not been replaced.');allowQuit=true;app.exit(1);});

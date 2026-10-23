@@ -23,7 +23,7 @@ npm run desktop:build
 
 The builder supports macOS arm64/x64, Windows x64 and Linux x64. It creates a portable application, versioned ZIP and SHA256 checksum under `outputs/`. The GitHub workflow verifies the source and builds all four targets. Packaging on a platform is distinct from testing its native workflows. See [desktop release operations](desktop/RELEASE.md) for signing, notarization, update feeds and isolated QA.
 
-macOS developers can configure a [retained local signing identity](docs/LOCAL_SIGNING.md) so rebuilding does not change the app's Keychain identity. Local certificate setup and any scoped trust authorization are explicit; public distribution uses an Apple-issued Developer ID.
+macOS developers can configure a [retained local signing identity](docs/LOCAL_SIGNING.md) to preserve the app's certificate-pinned signing requirement. This local certificate has no Apple TeamIdentifier, so a changed build can still require Keychain authorization. Local certificate setup and any scoped trust authorization are explicit; supported identity continuity across public updates requires an Apple-issued Developer ID.
 
 Open the app and create a local studio account. There is no default production password. A workspace administrator can create additional accounts; project administrators assign admin, editor, contributor or reviewer access to individual projects. Project membership is enforced by the embedded service.
 
@@ -63,6 +63,6 @@ IFC editing requires supported rectangular vertical extrusions and placements. R
 
 See [PRD acceptance mapping](docs/PRD_ACCEPTANCE.md), [validation evidence](docs/VALIDATION.md), [third-party provenance](docs/THIRD_PARTY.md) and [release operations](desktop/RELEASE.md). Automated verification covers geometry, costs, calendars, scenarios, IFC exchange, atomic AI changes, identity, permissions, concurrency, encryption, recovery, immutable reviews and desktop isolation. CI also scans dependencies and inspects packaged ASAR contents and preserved license notices.
 
-Version 0.3.2 is a release candidate for controlled technical evaluation. Public distribution still requires publisher signing/notarization credentials, native acceptance on each supported platform, independent professional quantity/schedule checks and the PRD's 3–5 firm pilot. Those external acceptance gates cannot be established by unit tests or local packaging. Automatic updates remain disabled unless the publisher configures a signed trusted feed and matching release identity.
+Version 0.3.3 is a release candidate for controlled technical evaluation. Public distribution still requires publisher signing/notarization credentials, native acceptance on each supported platform, independent professional quantity/schedule checks and the PRD's 3–5 firm pilot. Those external acceptance gates cannot be established by unit tests or local packaging. Automatic updates remain disabled unless the publisher configures a signed trusted feed and matching release identity.
 
 The browser UI remains available for development with `npm run dev` at [localhost:5173](http://127.0.0.1:5173). Its role selector is a development simulation and its separate `server/data/` store is not the production desktop security model. Do not expose it to a network.
