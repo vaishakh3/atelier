@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import {DEFAULT_AI_MODEL,resolveAiModel} from '../src/domain/aiConfig';
 
 export interface SecureStorageAdapter {
   available():Promise<boolean>;
@@ -9,10 +10,10 @@ export interface SecureStorageAdapter {
 }
 interface ProtectedEnvelope {version:1;protection:'os-keychain';ciphertext:string}
 export interface Credential {apiKey:string;model:string}
-export const defaultModel='gpt-4.1-mini';
+export const defaultModel=DEFAULT_AI_MODEL;
 export function validateModel(value:unknown):string {
   if(typeof value!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,120}$/.test(value))throw new Error('Choose a valid model identifier.');
-  return value;
+  return resolveAiModel(value);
 }
 export function validateApiKey(value:unknown):string {
   if(typeof value!=='string'||!/^sk-[a-zA-Z0-9_-]{17,1021}$/.test(value.trim()))throw new Error('Enter a valid OpenAI API key.');
@@ -62,7 +63,7 @@ export async function getProfileDataKey(profile:string,adapter:SecureStorageAdap
 }
 export async function loadApiCredential(directory:string,adapter:SecureStorageAdapter):Promise<Credential|null>{
   const value=await unprotect(path.join(directory,'openai.protected.json'),adapter);if(value===null)return null;
-  try{const credential=JSON.parse(value);return{apiKey:validateApiKey(credential.apiKey),model:validateModel(credential.model)};}catch{throw new Error('The stored OpenAI credential is invalid. Configure a replacement key in Settings.');}
+  try{const credential=JSON.parse(value),normalized={apiKey:validateApiKey(credential.apiKey),model:validateModel(credential.model??defaultModel)};if(credential.model!==normalized.model)await protect(path.join(directory,'openai.protected.json'),JSON.stringify(normalized),adapter);return normalized;}catch{throw new Error('The stored OpenAI credential is invalid. Configure a replacement key in Settings.');}
 }
 export async function saveApiCredential(directory:string,input:Credential,adapter:SecureStorageAdapter):Promise<void>{
   const credential={apiKey:validateApiKey(input.apiKey),model:validateModel(input.model)};

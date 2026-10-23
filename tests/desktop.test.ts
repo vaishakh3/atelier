@@ -11,6 +11,7 @@ import type { SecureStorageAdapter } from '../desktop/secure-store';
 import { validateUpdateConfig, verifySignedUpdateFeed } from '../desktop/updates';
 import { assertWorkspaceAdministrator } from '../desktop/authorization';
 import { decryptLegacyArchive, preserveLegacyLocalStorage } from '../desktop/legacy-storage';
+import {DEFAULT_AI_MODEL,resolveAiModel} from '../src/domain/aiConfig';
 
 const directories:string[]=[];
 async function temporary(){const parent=path.join(process.cwd(),'work');await mkdir(parent,{recursive:true});const dir=await mkdtemp(path.join(parent,'desktop-test-'));directories.push(dir);return dir;}
@@ -52,8 +53,14 @@ describe('desktop protected storage and diagnostics',()=>{
   expect(await loadApiCredential(directory,adapter)).toBeNull();
   await saveApiCredential(directory,{apiKey,model:'gpt-4.1-mini'},adapter);
   expect(await readFile(path.join(directory,'openai.protected.json'),'utf8')).not.toContain(apiKey);
-  expect(await loadApiCredential(directory,adapter)).toEqual({apiKey,model:'gpt-4.1-mini'});
+  expect(await loadApiCredential(directory,adapter)).toEqual({apiKey,model:DEFAULT_AI_MODEL});
   await removeApiCredential(directory);expect(await loadApiCredential(directory,adapter)).toBeNull();
+ });
+ it('migrates the protected former default without replacing the key or deliberate alternative models',async()=>{
+  const directory=await temporary(),adapter=protectedAdapter(),apiKey=`sk-proj-${'c'.repeat(80)}`,filename=path.join(directory,'openai.protected.json');
+  const legacyCipher=await adapter.encrypt(JSON.stringify({apiKey,model:'gpt-4.1-mini'}));await writeFile(filename,JSON.stringify({version:1,protection:'os-keychain',ciphertext:legacyCipher.toString('base64')}));const before=await readFile(filename,'utf8');
+  expect(await loadApiCredential(directory,adapter)).toEqual({apiKey,model:DEFAULT_AI_MODEL});const migrated=await readFile(filename,'utf8');expect(migrated).not.toBe(before);expect(migrated).not.toContain(apiKey);const decrypted=await adapter.decrypt(Buffer.from(JSON.parse(migrated).ciphertext,'base64'));expect(JSON.parse(decrypted.result)).toEqual({apiKey,model:DEFAULT_AI_MODEL});
+  await saveApiCredential(directory,{apiKey,model:'gpt-6-luna'},adapter);const alternative=await readFile(filename,'utf8');expect(await loadApiCredential(directory,adapter)).toEqual({apiKey,model:'gpt-6-luna'});expect(await readFile(filename,'utf8')).toBe(alternative);expect(resolveAiModel('gpt-4.1-mini')).toBe(DEFAULT_AI_MODEL);expect(validateModel('gpt-6-luna')).toBe('gpt-6-luna');
  });
  it('rejects malformed credentials and model identifiers without echoing key material',()=>{
   expect(()=>validateApiKey('plain text')).toThrow(/valid OpenAI API key/);expect(()=>validateModel('model\n<script>')).toThrow(/valid model identifier/);

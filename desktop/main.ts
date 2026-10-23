@@ -47,7 +47,7 @@ async function readExternalEnvironment(filename:string):Promise<ApiKeyStatus>{
   return{configured:true,model:process.env.OPENAI_MODEL};
 }
 async function loadCredential(){
-  if(!app.isPackaged&&process.env.ATELIER_ENV_FILE&&path.isAbsolute(process.env.ATELIER_ENV_FILE)){loadEnv({path:process.env.ATELIER_ENV_FILE,quiet:true,override:true});if(process.env.OPENAI_API_KEY){keySource='development-env';return;}}
+  if(!app.isPackaged&&process.env.ATELIER_ENV_FILE&&path.isAbsolute(process.env.ATELIER_ENV_FILE)){loadEnv({path:process.env.ATELIER_ENV_FILE,quiet:true,override:true});if(process.env.OPENAI_API_KEY){process.env.OPENAI_MODEL=validateModel(process.env.OPENAI_MODEL||defaultModel);keySource='development-env';return;}}
   delete process.env.OPENAI_API_KEY;delete process.env.OPENAI_MODEL;
   let preferences:{externalEnvPath?:string}={};try{preferences=JSON.parse(await readFile(preferencesPath(),'utf8'));}catch{}
   if(typeof preferences.externalEnvPath==='string'){try{await readExternalEnvironment(preferences.externalEnvPath);keySource='external-env';return;}catch{void log('external-credential-unavailable');}}

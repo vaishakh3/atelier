@@ -22,7 +22,12 @@ export interface Scenario { id:string; name:string; baselineVersion:number; chan
 export interface ElementChange { elementId:string; before:Partial<BimElement>; after:Partial<BimElement>; }
 export interface ElementCreation {elementId:string;before:null;after:BimElement}
 export interface RepetitionProposal {sourceIds:string[];count:number;offsetX:number;offsetY:number;idPrefix:string;sources:BimElement[]}
-export interface AiProposal { id:string; prompt:string; summary:string; kind:'edit'|'analysis'|'schedule'|'repetition'; changes:ElementChange[]; issues:string[]; selectedIds:string[]; model:string; createdAt:string; crewCount?:number; repetition?:RepetitionProposal;creations?:ElementCreation[]; }
+export type LayoutUse = 'bedroom'|'bathroom'|'living'|'kitchen'|'dining'|'theater'|'pool'|'study'|'utility'|'garage'|'other';
+export interface LayoutRoom {key:string;name:string;use:LayoutUse;area:number|null;attachedTo:string|null}
+export interface LayoutSpec {levelId:string;footprintId:string|null;width:number|null;depth:number|null;rooms:LayoutRoom[]}
+export interface LayoutRequest extends LayoutSpec {idPrefix:string}
+export interface LayoutProposal extends LayoutRequest {baselineVersion:number}
+export interface AiProposal { id:string; prompt:string; summary:string; kind:'edit'|'analysis'|'schedule'|'repetition'|'layout'; changes:ElementChange[]; issues:string[]; selectedIds:string[]; model:string; createdAt:string; crewCount?:number; repetition?:RepetitionProposal;layout?:LayoutProposal;creations?:ElementCreation[]; }
 export interface SavedVersion { id:string; label:string; actor:string; timestamp:string; project:Project; }
 export interface ImportReport { schema:string; imported:number; referenceOnly:number; excluded:number; classes:{name:string; count:number; editable:number; referenceOnly:number}[]; warnings:string[]; source?:{schema:string;entityCount:number;lengthUnitScale:number;unitsDeclared:boolean}; }
 export interface ReviewComment { id:string; versionId:string; author:string; text:string; createdAt:string; }

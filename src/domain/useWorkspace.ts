@@ -6,12 +6,13 @@ import type {Project,SavedVersion,ReviewComment,Role} from './types';
 import {createDemoProject,createBlankProject} from './seed';
 import {auditProject} from './transactions';
 import {projectSchema} from './schema';
+import {DEFAULT_AI_MODEL} from './aiConfig';
 const CACHE='atelier-project-v1';
 interface Options {identityRequired?:boolean;userId?:string;authenticated?:boolean}
 function initial(identityRequired:boolean){if(!identityRequired){try{const text=localStorage.getItem(CACHE);if(text){const result=projectSchema.safeParse(JSON.parse(text));if(result.success)return {project:result.data as Project,recovered:true};}}catch{}}return {project:createDemoProject(),recovered:false};}
 export function useWorkspace({identityRequired=false,userId,authenticated=true}:Options={}){
  const [boot]=useState(()=>initial(identityRequired));
- const [project,setProject]=useState<Project>(boot.project),[projects,setProjects]=useState<Project[]>([]),[saved,setSaved]=useState('Connecting…'),[ready,setReady]=useState(false),[aiReady,setAiReady]=useState(false),[versions,setVersions]=useState<SavedVersion[]>([]),[comments,setComments]=useState<ReviewComment[]>([]),[error,setError]=useState(''),[tick,setTick]=useState(0),[historyEpoch,setHistoryEpoch]=useState(0),[transitioning,setTransitioning]=useState(false),[permissions,setPermissions]=useState<Record<string,Role>>({}),[warnings,setWarnings]=useState<string[]>([]),[recoveryCopy,setRecoveryCopy]=useState<Project|null>(null);
+ const [project,setProject]=useState<Project>(boot.project),[projects,setProjects]=useState<Project[]>([]),[saved,setSaved]=useState('Connecting…'),[ready,setReady]=useState(false),[aiReady,setAiReady]=useState(false),[aiModel,setAiModel]=useState(DEFAULT_AI_MODEL),[versions,setVersions]=useState<SavedVersion[]>([]),[comments,setComments]=useState<ReviewComment[]>([]),[error,setError]=useState(''),[tick,setTick]=useState(0),[historyEpoch,setHistoryEpoch]=useState(0),[transitioning,setTransitioning]=useState(false),[permissions,setPermissions]=useState<Record<string,Role>>({}),[warnings,setWarnings]=useState<string[]>([]),[recoveryCopy,setRecoveryCopy]=useState<Project|null>(null);
  const undo=useRef<Project[]>([]),redo=useRef<Project[]>([]),active=useRef(project),queue=useRef<Promise<void>>(Promise.resolve()),disposed=useRef(false),transition=useRef(false),viewEpoch=useRef(0),persisted=useRef(new Map<string,string>()),submitted=useRef(new Map<string,string>()),etags=useRef(new Map<string,string>()),debounce=useRef<ReturnType<typeof setTimeout>|null>(null),auth=useRef(authenticated),actor=useRef(userId||'local-author');
  active.current=project;auth.current=authenticated;actor.current=userId||'local-author';
  const writable=useRef(false);
@@ -43,7 +44,7 @@ export function useWorkspace({identityRequired=false,userId,authenticated=true}:
  const save=useCallback((value:Project)=>{const result=queue.current.then(()=>persist(value));queue.current=result.catch(()=>{});return result;},[persist]);
  const flush=useCallback(async()=>{if(debounce.current){clearTimeout(debounce.current);debounce.current=null;}await save(active.current);},[save]);
  useEffect(()=>{let alive=true;(async()=>{try{
-  const health=await apiFetch('/api/health').then(r=>r.json());if(alive)setAiReady(Boolean(health.aiReady));
+  const health=await apiFetch('/api/health').then(r=>r.json());if(alive){setAiReady(Boolean(health.aiReady));if(typeof health.model==='string')setAiModel(health.model);}
   if(!identityRequired){const session=await fetch('/api/session',{method:'POST',credentials:'same-origin'});if(!session.ok)throw new Error('Local session unavailable');}
   const response=await apiFetch('/api/projects');if(!response.ok)throw new Error('Project access is unavailable.');const data=await response.json();
   if(!alive)return;const valid=(data.projects||[]).filter((p:unknown)=>projectSchema.safeParse(p).success) as Project[];
@@ -118,5 +119,5 @@ export function useWorkspace({identityRequired=false,userId,authenticated=true}:
   }finally{endTransition();}
  };
  const clearRecoveryCopy=async()=>{const response=await apiFetch('/api/recovery/'+active.current.id,{method:'DELETE'});if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||'The recovery copy could not be cleared.');}setRecoveryCopy(null);};
- return {project,projects,commit,switchProject,newProject,saved,ready,transitioning,aiReady,versions,comments,publish,restore,addComment,error,setError,undoAction,redoAction,canUndo:undo.current.length>0,canRedo:redo.current.length>0,tick,flush,currentRole,warnings,recoveryCopy,clearRecoveryCopy,refresh,getEtag:()=>etags.current.get(active.current.id)};
+ return {project,projects,commit,switchProject,newProject,saved,ready,transitioning,aiReady,aiModel,versions,comments,publish,restore,addComment,error,setError,undoAction,redoAction,canUndo:undo.current.length>0,canRedo:redo.current.length>0,tick,flush,getCurrentProject:()=>structuredClone(active.current),currentRole,warnings,recoveryCopy,clearRecoveryCopy,refresh,getEtag:()=>etags.current.get(active.current.id)};
 }

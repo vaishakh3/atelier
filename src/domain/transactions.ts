@@ -2,7 +2,8 @@ import type { Project, AiProposal, BimElement, ElementChange } from './types';
 import { uid } from './seed';
 import { worldToLocal } from '../model/geometry';
 import {previewRepetition} from './repetition';
-import {elementSchema} from './schema';
+import {previewLayout} from './layout';
+import {elementSchema,layoutProposalSchema} from './schema';
 
 export function auditProject(project:Project,action:string,affectedIds:string[]=[],actor='You'):Project {
   return {...project,version:project.version+1,updatedAt:new Date().toISOString(),audit:[{id:uid('audit'),action,affectedIds,actor,timestamp:new Date().toISOString()},...project.audit].slice(0,250)};
@@ -12,7 +13,7 @@ const editableFields=new Set(['name','material','typeId','width','depth','height
 const numericFields=new Set(['width','depth','height','x','y','z','rotation']);
 const geometryFields=new Set(['width','depth','height','x','y','z','rotation']);
 const writableProperties=new Set(['classification','status','specification','fireRating']);
-const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','creations']);
+const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','layout','creations']);
 const unsafeKeys=new Set(['__proto__','prototype','constructor']);
 const own=(object:object,key:string)=>Object.prototype.hasOwnProperty.call(object,key);
 function plain(value:unknown):value is Record<string,unknown> {
@@ -59,8 +60,36 @@ function validateOpening(element:BimElement,project:Project) {
 /** Validate the entire proposal before producing a detached, undoable project revision. */
 export function applyProposal(project:Project,proposal:AiProposal):Project {
   if(!plain(proposal)||Object.keys(proposal).some(key=>!proposalFields.has(key)))throw new Error('The proposal shape is invalid.');
-  for(const key of ['id','prompt','summary','model','createdAt']as const)if(typeof proposal[key]!=='string'||proposal[key].length>10000)throw new Error('The proposal metadata is invalid.');
-  if(!['edit','analysis','schedule','repetition'].includes(proposal.kind)||!Array.isArray(proposal.changes)||proposal.changes.length>1000||!Array.isArray(proposal.selectedIds)||proposal.selectedIds.length>10000||proposal.selectedIds.some(id=>typeof id!=='string')||!Array.isArray(proposal.issues)||proposal.issues.length>500||proposal.issues.some(issue=>typeof issue!=='string'))throw new Error('The proposal shape is invalid.');
+  const metadataLimits={id:160,prompt:4000,summary:1500,model:121,createdAt:100};
+  for(const key of ['id','prompt','summary','model','createdAt']as const)if(typeof proposal[key]!=='string'||proposal[key].length>metadataLimits[key])throw new Error('The proposal metadata is invalid.');
+  if(!['edit','analysis','schedule','repetition','layout'].includes(proposal.kind)||!Array.isArray(proposal.changes)||proposal.changes.length>1000||!Array.isArray(proposal.selectedIds)||proposal.selectedIds.length>10000||proposal.selectedIds.some(id=>typeof id!=='string')||!Array.isArray(proposal.issues)||proposal.issues.length>500||proposal.issues.some(issue=>typeof issue!=='string'))throw new Error('The proposal shape is invalid.');
+  if(proposal.kind==='layout'){
+    if(proposal.changes.length||own(proposal,'crewCount')||own(proposal,'repetition'))throw new Error('Create a layout separately from model edits, repetition and crew changes.');
+    const parsed=layoutProposalSchema.safeParse(proposal.layout);
+    if(!parsed.success||parsed.data.idPrefix!==proposal.id)throw new Error('The layout specification is invalid.');
+    const layout=parsed.data;
+    if(layout.baselineVersion!==project.version)throw new Error('The project changed after this layout preview. Generate a new proposal.');
+    if(layout.footprintId?proposal.selectedIds.length!==1||proposal.selectedIds[0]!==layout.footprintId:proposal.selectedIds.length!==0)throw new Error('A layout requires an empty selection or exactly its selected slab footprint.');
+    if(!Array.isArray(proposal.creations)||proposal.creations.length<1||proposal.creations.length>200)throw new Error('The layout creation review is invalid.');
+    const derived=previewLayout(project,layout);
+    if(derived.issues.length||!derived.elements.length)throw new Error(derived.issues.join(' ')||'The layout cannot be created within this footprint.');
+    if(proposal.creations.length!==derived.elements.length)throw new Error('The layout creation review is incomplete.');
+    const reviewed=new Map<string,unknown>();
+    for(const creation of proposal.creations){
+      if(!plain(creation)||Object.keys(creation).some(key=>!['elementId','before','after'].includes(key))||typeof creation.elementId!=='string'||reviewed.has(creation.elementId)||creation.before!==null)throw new Error('The layout contains an invalid or duplicate creation.');
+      reviewed.set(creation.elementId,creation.after);
+    }
+    for(const element of derived.elements){
+      if(!same(reviewed.get(element.id),element))throw new Error('The layout creation diff was changed or is stale. Generate a new proposal.');
+      if(!elementSchema.safeParse(element).success)throw new Error('A layout element exceeds the supported model schema.');
+      validateGeometry(element);validateProperties(element.properties);
+    }
+    if(project.elements.length+derived.elements.length>10000)throw new Error('This layout exceeds the supported project element limit.');
+    const next=structuredClone(project);next.elements.push(...structuredClone(derived.elements));
+    for(const element of derived.elements)validateOpening(element,next);
+    return auditProject(next,`AI: ${proposal.summary}`,derived.elements.map(element=>element.id),'You · AI assisted');
+  }
+  if(own(proposal,'layout'))throw new Error('A layout cannot be mixed with another proposal kind.');
   if(proposal.kind==='repetition'){
     if(proposal.changes.length||own(proposal,'crewCount'))throw new Error('Evaluate repetition separately from edits and crew changes.');
     const repetition=proposal.repetition;

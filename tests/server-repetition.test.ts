@@ -6,7 +6,8 @@ import {aiOutputSchema} from '../src/domain/schema';
 import type {AiOutput} from '../src/domain/schema';
 import type {Project} from '../src/domain/types';
 const sourceId='wall-n-00';
-const operation=(patch:Partial<AiOutput['operations'][number]>={}):AiOutput=>({summary:'Repeat selected sources',issues:[],operations:[{action:'repeat-elements',elementIds:[sourceId],property:null,value:null,numericValue:null,typeId:null,crewCount:null,count:2,offsetX:0,offsetY:20,...patch}]});
+type SelectedOperation=Exclude<AiOutput['operations'][number],{action:'create-layout'}>;
+const operation=(patch:Partial<SelectedOperation>={}):AiOutput&{operations:SelectedOperation[]}=>({summary:'Repeat selected sources',issues:[],operations:[{action:'repeat-elements',elementIds:[sourceId],property:null,value:null,numericValue:null,typeId:null,crewCount:null,count:2,offsetX:0,offsetY:20,...patch}]});
 const input=(project:Project)=>({project,prompt:'Create two additional translated copies of the selected wall, twenty metres apart.',selectedIds:[sourceId]});
 function freeze<T>(value:T):T{if(value&&typeof value==='object'){Object.freeze(value);for(const child of Object.values(value))freeze(child);}return value;}
 
