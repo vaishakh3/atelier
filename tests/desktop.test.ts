@@ -12,7 +12,7 @@ import { assertWorkspaceAdministrator } from '../desktop/authorization';
 import { decryptLegacyArchive, preserveLegacyLocalStorage } from '../desktop/legacy-storage';
 
 const directories:string[]=[];
-async function temporary(){const dir=await mkdtemp(path.join(process.cwd(),'work','desktop-test-'));directories.push(dir);return dir;}
+async function temporary(){const parent=path.join(process.cwd(),'work');await mkdir(parent,{recursive:true});const dir=await mkdtemp(path.join(parent,'desktop-test-'));directories.push(dir);return dir;}
 function protectedAdapter():SecureStorageAdapter {
  const key=randomBytes(32);
  return{available:async()=>true,encrypt:async value=>{const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key,iv),data=Buffer.concat([cipher.update(value,'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),data]);},decrypt:async value=>{const cipher=createDecipheriv('aes-256-gcm',key,value.subarray(0,12));cipher.setAuthTag(value.subarray(12,28));return{result:Buffer.concat([cipher.update(value.subarray(28)),cipher.final()]).toString('utf8'),shouldReEncrypt:false};}};
