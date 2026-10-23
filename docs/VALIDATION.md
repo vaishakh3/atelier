@@ -2,7 +2,28 @@
 
 Evidence is separated into automated checks, measured synthetic performance, final desktop integration and external professional acceptance. A passing unit test, configured credential or build command alone does not establish a working packaged user workflow.
 
-## Current automated checks
+## 0.3.0 model and layout update
+
+Runtime source commit `99ac51c9d2ce13afd9b79283278afe0a78b5cd69` adds a new room-program layout operation and upgrades the shared server, desktop and settings default to **GPT-6.1 Sol** (`gpt-6.1-sol`). Missing or former `gpt-4.1-mini` defaults resolve to this model; other deliberate model overrides and historical proposal provenance are preserved. The Responses request uses supported medium reasoning, a 16,000-token output budget, a 120-second timeout and `store: false`; it never falls back to another model silently. Model access, timeout, incomplete output and provider authentication errors remain distinct from local identity expiry. Compatibility was checked against [OpenAI's model documentation](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+
+| Check | Recorded 0.3.0 result |
+|---|---|
+| Full automated suite | **246 tests passed across 25 files**, including 17 layout engine, seven layout transaction and seven copilot UI regressions. |
+| TypeScript and production build | Passed; final frontend `index-DFJzLW1u.js`, scenario worker `scenarios.worker-DffuKv35.js`. |
+| Dependency audit | Zero reported vulnerabilities, all severities, at this checkpoint. |
+| Live GPT-6.1 Sol, empty project | The reported program produced two bedrooms, two attached bathrooms, one common bathroom, living room, home theater and indoor pool zone. It proposed a 10.4 × 14.7 m envelope and 39 BIM elements. The source stayed empty until explicit acceptance; the accepted result passed geometry validation. |
+| Live GPT-6.1 Sol, selected slab | The same eight-room program produced 38 creations within an existing 16 × 20 m slab rotated 20 degrees. Acceptance retained that slab unchanged and produced 39 total elements with valid hosted openings. |
+| macOS arm64 archive | Version 0.3.0 package/ASAR inspection, 161-package/178-file runtime notice verification, strict deep ad-hoc signature verification and exact approved-credential exclusion passed. Thirteen bundled source/configuration files were checked against the approved key without displaying it. |
+| Full UI flow (isolated browser, production frontend) | The exact reported prompt produced the 39-element proposal from an empty v1 project. Closing the review modal retained zero elements/v1. Acceptance created 39 elements/v2; Undo returned to zero/v3; Redo restored 39/v4, which saved successfully. Model validation was clear, GPT-6.1 Sol was displayed, and no browser error logs were observed. The real plan/room table and complete creation list were visible before acceptance. This is browser-based evidence for the shared production UI, not a native 0.3.0 desktop run. |
+| Cross-platform CI | [Run 40026873105](https://github.com/vaishakh3/atelier/actions/runs/40026873105) passed source verification and all four packaging jobs (macOS arm64/x64, Windows x64, Linux x64), with four uploaded artifacts for the exact runtime commit. Native workflow acceptance is separate. |
+
+The local `Atelier-0.3.0-darwin-arm64.zip` SHA-256 is `1dbc116430dea44ed875520af259fb0ed798eb96441147b1b66731c0402f9939`. It has an ad-hoc signature, not an Apple Developer ID signature or notarization.
+
+The new generator proposes one rectangular storey with a central circulation template and up to 16 program spaces. An explicit room list is preserved; unspecified dimensions use disclosed planning defaults. It retains a selected empty slab's position, orientation and size, rejects occupied/insufficient footprints and geometry locks, reuses approved existing component types, and never invents rates or removes source geometry. Attached bathrooms have bedroom access; other program rooms connect to circulation, with an entrance to outside. Complete creation diffs are independently regenerated and checked again at acceptance. Closing/rejecting the preview leaves the model unchanged; acceptance is one undoable transaction. Pool and garage rooms reserve architectural zones only and exclude specialist construction/vehicle access design. No roof, foundations, structural analysis, detailed MEP or compliance approval is generated.
+
+The final 0.3.0 native smoke and UI walkthrough is awaiting macOS Keychain authorization for the rebuilt binary. Process sampling identified `SecItemCopyMatching` waiting on the system authorization service before the embedded backend starts. Computer Use blocks access to Apple's SecurityAgent; the user must complete that OS prompt. No password, keychain access rule or encryption setting was changed to bypass it. Earlier 0.2.0 native evidence below must not be relabelled as a completed 0.3.0 native run.
+
+## 0.2.0 recorded release evidence
 
 On October 24, 2026, the following checks completed. The final runtime source is commit `75939f71279234901502ae4996782fd681ce49d9`; subsequent release-evidence edits do not change the packaged application.
 
