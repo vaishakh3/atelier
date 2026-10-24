@@ -55,6 +55,14 @@ describe('bounded encrypted copilot conversation memory',()=>{
   for(const sourceArea of [0,NaN,Infinity,1000001])await expect(append(restarted,key,f.project,{...proposal('invalid-resize',true),roomResize:{...roomResize,sourceArea}})).rejects.toThrow();
   expect((await restarted.get(key,f.project.id)).turns).toHaveLength(1);expect((await restarted.begin(key,f.project.id)).pendingProposal).toBeUndefined();
  });
+ it('retains local room intent and stable source IDs through encrypted restart and rejects malformed scope metadata',async()=>{
+  const f=await fixture(),key=f.history.key('user-owner',f.project),localEdit={action:'replace-rooms' as const,roomIds:['bedroom-2','bedroom-3'],name:'Study',use:'study' as const,baselineVersion:f.project.version,idPrefix:'local-study'},value:AiProposal={...proposal('local-study'),kind:'edit',selectedIds:localEdit.roomIds,localEdit};
+  await append(f.history,key,f.project,value);
+  const restarted=new CopilotConversationStore(new RecordStore(f.directory,Buffer.alloc(32,62))),loaded=await restarted.begin(key,f.project.id);
+  expect(loaded.pendingProposal?.localEdit).toEqual(localEdit);expect(loaded.turns[0]).toMatchObject({status:'proposed',localEdit,selectedIds:['bedroom-2','bedroom-3']});
+  await restarted.outcome(key,f.project.id,value.id,'applied');expect((await restarted.get(key,f.project.id)).turns[0].localEdit).toEqual(localEdit);
+  await expect(append(restarted,key,f.project,{...value,id:'invalid-local',localEdit:{...localEdit,deleteOtherRooms:true}}as AiProposal)).rejects.toThrow();expect((await restarted.get(key,f.project.id)).turns).toHaveLength(1);
+ });
  it('cannot resurrect a reset conversation with an in-flight response',async()=>{
   const f=await fixture(),key=f.history.key('user-owner',f.project),started=await f.history.begin(key,f.project.id);await f.history.reset(key,f.project.id);
   await expect(f.history.complete(key,f.project,started.epoch,proposal('late-layout',true))).rejects.toMatchObject({code:'CONVERSATION_RESET'});

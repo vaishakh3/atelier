@@ -3,7 +3,8 @@ import { uid } from './seed';
 import { footprint,worldToLocal } from '../model/geometry';
 import {previewRepetition} from './repetition';
 import {previewLayout} from './layout';
-import {elementSchema,levelSchema,projectSchema,layoutProposalSchema} from './schema';
+import {previewLocalRoomEdit} from './localRoomEdit';
+import {elementSchema,levelSchema,projectSchema,layoutProposalSchema,localRoomEditProposalSchema} from './schema';
 
 export function auditProject(project:Project,action:string,affectedIds:string[]=[],actor='You'):Project {
   return {...project,version:project.version+1,updatedAt:new Date().toISOString(),audit:[{id:uid('audit'),action,affectedIds,actor,timestamp:new Date().toISOString()},...project.audit].slice(0,250)};
@@ -13,7 +14,7 @@ const editableFields=new Set(['name','material','typeId','width','depth','height
 const numericFields=new Set(['width','depth','height','x','y','z','rotation']);
 const geometryFields=new Set(['width','depth','height','x','y','z','rotation']);
 const writableProperties=new Set(['classification','status','specification','fireRating']);
-const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','layout','creations','levelCreations','removals','roomResize']);
+const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','layout','creations','levelCreations','removals','roomResize','localEdit']);
 const unsafeKeys=new Set(['__proto__','prototype','constructor']);
 const own=(object:object,key:string)=>Object.prototype.hasOwnProperty.call(object,key);
 function plain(value:unknown):value is Record<string,unknown> {
@@ -89,7 +90,54 @@ export function applyProposal(project:Project,proposal:AiProposal):Project {
   if(!['edit','analysis','schedule','repetition','layout'].includes(proposal.kind)||!Array.isArray(proposal.changes)||proposal.changes.length>1000||!Array.isArray(proposal.selectedIds)||proposal.selectedIds.length>10000||proposal.selectedIds.some(id=>typeof id!=='string')||!Array.isArray(proposal.issues)||proposal.issues.length>500||proposal.issues.some(issue=>typeof issue!=='string'))throw new Error('The proposal shape is invalid.');
   if(own(proposal,'roomResize')){
     const resize=proposal.roomResize;
-    if(proposal.kind!=='layout'||!plain(resize)||Object.keys(resize).length!==4||Object.keys(resize).some(key=>!['roomKey','roomName','sourceArea','targetArea'].includes(key))||typeof resize.roomKey!=='string'||!/^[A-Za-z0-9_-]{1,40}$/.test(resize.roomKey)||typeof resize.roomName!=='string'||!resize.roomName.trim()||resize.roomName.length>3000||[resize.sourceArea,resize.targetArea].some(area=>typeof area!=='number'||!Number.isFinite(area)||area<=0||area>1e6))throw new Error('The room resize context is invalid.');
+    if(!(proposal.kind==='layout'||proposal.kind==='edit'&&proposal.localEdit?.action==='resize-room')||!plain(resize)||Object.keys(resize).length!==4||Object.keys(resize).some(key=>!['roomKey','roomName','sourceArea','targetArea'].includes(key))||typeof resize.roomKey!=='string'||!/^[A-Za-z0-9_-]{1,40}$/.test(resize.roomKey)||typeof resize.roomName!=='string'||!resize.roomName.trim()||resize.roomName.length>3000||[resize.sourceArea,resize.targetArea].some(area=>typeof area!=='number'||!Number.isFinite(area)||area<=0||area>1e6))throw new Error('The room resize context is invalid.');
+  }
+  if(own(proposal,'localEdit')){
+    if(proposal.kind!=='edit'||own(proposal,'layout')||own(proposal,'levelCreations')||own(proposal,'crewCount')||own(proposal,'repetition'))throw new Error('A local room edit must be reviewed separately from house layouts and other operations.');
+    const parsed=localRoomEditProposalSchema.safeParse(proposal.localEdit);
+    if(!parsed.success||parsed.data.idPrefix!==proposal.id)throw new Error('The local room edit specification is invalid.');
+    const spec=parsed.data;
+    if(spec.baselineVersion!==project.version)throw new Error('The project changed after this local edit preview. Generate a new proposal.');
+    const sourceIds=spec.action==='resize-room'?[spec.roomId]:spec.roomIds;
+    if(new Set(sourceIds).size!==sourceIds.length||proposal.selectedIds.length!==sourceIds.length||sourceIds.some(id=>!proposal.selectedIds.includes(id)))throw new Error('The local edit must name exactly its reviewed source rooms.');
+    if(proposal.roomResize){
+      const room=spec.action==='resize-room'?project.elements.find(element=>element.id===spec.roomId):undefined;
+      if(!room||String(room.properties.layoutKey)!==proposal.roomResize.roomKey||spec.action!=='resize-room'||Math.abs(spec.targetArea-proposal.roomResize.targetArea)>1e-6)throw new Error('The room resize context does not match the local edit.');
+    }
+    const derived=previewLocalRoomEdit(project,spec);
+    if(derived.issues.length)throw new Error(derived.issues.join(' '));
+    if(!derived.changes.length&&!derived.creations.length&&!derived.removals.length)throw new Error('The local edit contains no model changes.');
+    const creations=proposal.creations??[],removals=proposal.removals??[];
+    if(!Array.isArray(creations)||!Array.isArray(removals)||!sameSnapshot(proposal.changes,derived.changes)||!sameSnapshot(creations,derived.creations)||!sameSnapshot(removals,derived.removals))throw new Error('The local edit diff was changed, is incomplete, or is stale. Generate a new proposal.');
+    const changed=new Map<string,BimElement>(),removed=new Set<string>(),created=new Set<string>(),existing=new Set(project.elements.map(element=>element.id));
+    const guardSource=(id:string,before:unknown,after?:BimElement)=>{
+      const current=project.elements.find(element=>element.id===id);
+      if(!current||!sameSnapshot(current,before)||!current.editable||current.externalId!==undefined||current.kind==='reference')throw new Error('A local edit source changed or is not editable native geometry.');
+      const fields=after?Object.keys(current).filter(key=>!sameSnapshot(current[key as keyof BimElement],after[key as keyof BimElement])):Object.keys(current);
+      if(fields.includes('properties'))for(const key of new Set([...Object.keys(current.properties),...Object.keys(after?.properties??{})]))if(!after||!sameSnapshot(current.properties[key],after.properties[key]))fields.push(`properties.${key}`,key);
+      if(fields.some(field=>geometryFields.has(field)||field==='footprint'))fields.push('geometry','geometry.*','position','position.*','dimensions','dimensions.*');
+      if(layoutScopeLocked(project,id,fields,'elements'))throw new Error('An affected local element or property is locked.');
+    };
+    for(const change of derived.changes){
+      const after=change.after as BimElement;guardSource(change.elementId,change.before,after);
+      if(after.id!==change.elementId||changed.has(after.id)||!elementSchema.safeParse(after).success)throw new Error('The local edit has invalid or duplicate changed geometry.');
+      validateGeometry(after);validateProperties(after.properties);changed.set(after.id,after);
+    }
+    for(const removal of derived.removals){guardSource(removal.elementId,removal.before);if(removed.has(removal.elementId)||changed.has(removal.elementId))throw new Error('The local removal scope is duplicated.');removed.add(removal.elementId);}
+    for(const creation of derived.creations){
+      const after=creation.after;
+      if(after.id!==creation.elementId||existing.has(after.id)||created.has(after.id)||!elementSchema.safeParse(after).success)throw new Error('The local edit has an invalid or duplicate new element.');
+      if(layoutScopeLocked(project,after.id,[...Object.keys(after),'geometry','geometry.*','position','position.*','dimensions','dimensions.*'],'elements'))throw new Error('The required local geometry is locked.');
+      validateGeometry(after);validateProperties(after.properties);created.add(after.id);
+    }
+    const affected=[...changed.values(),...derived.creations.map(item=>item.after)];
+    for(const after of affected){const type=project.types.filter(item=>item.id===after.typeId);if(type.length!==1||!type[0].approved||type[0].kind!==after.kind||type[0].material!==after.material)throw new Error('A local edit requires approved compatible component types.');}
+    const next=structuredClone(project);next.elements=project.elements.filter(element=>!removed.has(element.id)).map(element=>structuredClone(changed.get(element.id)??element));next.elements.push(...structuredClone(derived.creations.map(item=>item.after)));
+    if(!projectSchema.safeParse(next).success)throw new Error('The complete local edit does not satisfy the project schema.');
+    for(const element of next.elements)if(element.hostId&&removed.has(element.hostId))throw new Error('The local edit would orphan a retained hosted opening.');
+    for(const element of affected)validateOpening(element,next);
+    // This transaction does not refresh or approve construction activities or services.
+    return auditProject(next,`AI: ${proposal.summary}`,[...changed.keys(),...removed,...created],'You · AI assisted');
   }
   if(proposal.kind==='layout'){
     if(proposal.changes.length||own(proposal,'crewCount')||own(proposal,'repetition'))throw new Error('Create a layout separately from model edits, repetition and crew changes.');

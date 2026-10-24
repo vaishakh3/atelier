@@ -32,7 +32,7 @@ describe('embedded desktop service',()=>{
     }finally{await rm(staticDir,{recursive:true,force:true});}
   });
 });
-type SelectedOperation=Exclude<AiOutput['operations'][number],{action:'create-layout'}>;
+type SelectedOperation=Extract<AiOutput['operations'][number],{elementIds:string[]}>;
 const action=(changes:Partial<SelectedOperation>):AiOutput=>({summary:'Proposed change',issues:[],operations:[{action:'set-property',elementIds:[],property:null,value:null,numericValue:null,typeId:null,crewCount:null,count:null,offsetX:null,offsetY:null,...changes}]});
 describe('copilot proposal boundaries',()=>{
  it('creates a scoped preview without changing the project',()=>{const project=createDemoProject(),original=structuredClone(project);const window=project.elements.find(e=>e.kind==='window')!;const proposal=buildProposal(action({elementIds:[window.id],action:'replace-type',typeId:'window-thermal'}),{prompt:'replace selected windows',selectedIds:[window.id],project},'test');expect(proposal.changes[0].after.typeId).toBe('window-thermal');expect(project).toEqual(original);});
