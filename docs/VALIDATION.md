@@ -12,7 +12,7 @@ The production frontend was exercised against an isolated encrypted/authenticate
 
 The gallery was inspected at **1440 × 1000, 1280 × 900 and 720 × 900**; search, preview, persistent footer actions, photographs and details remained accessible, with no observed browser warnings/errors. The final source passed **764 tests across 76 files**, TypeScript and the production build. A locally signed macOS arm64 package passed strict deep signature verification and package inspection: **209 ASAR files**, 161 runtime dependency notices and all 11 licensed photographs; credential and private workspace-path exclusion passed. ASAR SHA-256: `acaedb12c0434c42c09a0808034ada474ad7a3aa1594e085598ba76546178500`.
 
-Native test and installation acceptance are pending completion of the macOS Keychain prompt at this checkpoint.
+The final retained-signer macOS package passed all **18 isolated desktop smoke assertions** with `packaged:true`. After a normal quit from saved `hhhh` v3, the verified package was installed at `/Applications/Atelier.app`, and LaunchServices registered that copy. Installed/output ASAR hashes match. All **66 protected project/vault files** retained their hashes through replacement and relaunch; the previous app remains recoverable in Trash. The existing-account sign-in screen opened and About Atelier visibly reported **0.8.1**. This verifies startup and isolated acceptance, not signed-in modification of a production project. The test build required Keychain authorization; future changed-build prompt continuity is not established.
 
 ## 0.8.0 interior studio
 
