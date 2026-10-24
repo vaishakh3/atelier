@@ -1,3 +1,4 @@
+import type {InteriorState} from '../interior/types';
 import type {DesignWorkbenchState} from './designWorkbench';
 import type {SiteContext} from '../site/types';
 import type {DesignLibrary} from '../model/authoring';
@@ -17,7 +18,7 @@ export interface SequenceAlternative { id:string; name:string; approved:boolean;
 export interface ScheduleConfig { startDate:string; workingDays:number[]; crews:number; crewCostPerDay:number; overheadPerDay:number; procurementDays:number; activities:ActivityDefinition[]; holidays?:string[]; sequenceAlternatives?:SequenceAlternative[]; modelReview?:{modelSignature:string;activitySignature:string;acceptedAt:string}; modelReviewRequired?:boolean; }
 export interface Constraints { budget:number|null; deadline:string|null; maxCrews:number; lockedElementIds:string[]; lockedProperties:string[]; }
 export interface AuditEntry { id:string; actor:string; timestamp:string; action:string; affectedIds:string[]; }
-export interface Project { workbench?:DesignWorkbenchState; site?:SiteContext; designLibrary?:DesignLibrary; viewState?:ProjectViewState; schemaVersion:1; id:string; name:string; description:string; location:string; units:'m'|'ft'; currency:'INR'|'USD'|'EUR'; version:number; createdAt:string; updatedAt:string; levels:Level[]; grids:GridLine[]; elements:BimElement[]; types:ElementType[]; allowances:Allowance[]; schedule:ScheduleConfig; constraints:Constraints; audit:AuditEntry[]; planning?:PlanningContext; services?:ServicePlan; }
+export interface Project { interior?:InteriorState; workbench?:DesignWorkbenchState; site?:SiteContext; designLibrary?:DesignLibrary; viewState?:ProjectViewState; schemaVersion:1; id:string; name:string; description:string; location:string; units:'m'|'ft'; currency:'INR'|'USD'|'EUR'; version:number; createdAt:string; updatedAt:string; levels:Level[]; grids:GridLine[]; elements:BimElement[]; types:ElementType[]; allowances:Allowance[]; schedule:ScheduleConfig; constraints:Constraints; audit:AuditEntry[]; planning?:PlanningContext; services?:ServicePlan; }
 export interface QuantityLine { elementId:string; name:string; kind:ElementKind; typeId:string; quantity:number; unit:string; formula:string; issues:string[]; }
 export interface CostLine { id:string; name:string; sourceIds:string[]; quantity:number; unit:string; material:number|null; labour:number|null; equipment:number|null; waste:number; total:number|null; formula:string; rateDate:string; issues:string[]; rateCurrency?:'INR'|'USD'|'EUR'; rateSource?:string; }
 export interface CostResult { lines:CostLine[]; material:number; labour:number; equipment:number; waste:number; allowances:number; overhead:number; total:number; completeness:number; issues:string[]; }

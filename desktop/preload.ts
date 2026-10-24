@@ -3,6 +3,7 @@ import { menuActions } from './contracts';
 import type { ApiKeyInput, ApiKeyStatus, CloseResult, DesktopInfo, DesktopMenuAction } from './contracts';
 
 contextBridge.exposeInMainWorld('atelierDesktop',Object.freeze({
+  openProductLink:(url:string):Promise<void>=>ipcRenderer.invoke('atelier:open-product-link',url),
   getInfo:():Promise<DesktopInfo>=>ipcRenderer.invoke('atelier:get-info'),
   configureApiKey:(input:ApiKeyInput):Promise<ApiKeyStatus>=>ipcRenderer.invoke('atelier:configure-api-key',input),
   chooseEnvFile:():Promise<ApiKeyStatus>=>ipcRenderer.invoke('atelier:choose-env-file'),

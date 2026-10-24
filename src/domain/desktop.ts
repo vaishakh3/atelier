@@ -12,6 +12,7 @@ export interface DesktopInfo {
 declare global {
   interface Window {
     atelierDesktop?: {
+      openProductLink?(url:string):Promise<void>;
       getInfo(): Promise<DesktopInfo>;
       onMenuAction(callback: (action: string) => void): () => void;
       onBeforeClose(callback: () => void): () => void;
@@ -24,3 +25,11 @@ declare global {
 }
 
 export const isDesktop = () => Boolean(window.atelierDesktop);
+
+/** Only called from an explicit product/source/search button. Desktop validates again in its main process. */
+export async function openProductLink(url:string):Promise<void>{
+  const {checkedProductLink}=await import('../../desktop/external-links');
+  const checked=checkedProductLink(url);
+  if(window.atelierDesktop){if(!window.atelierDesktop.openProductLink)throw new Error('Update Atelier to open product links.');await window.atelierDesktop.openProductLink(checked);return;}
+  window.open(checked,'_blank','noopener,noreferrer');
+}

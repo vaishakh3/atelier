@@ -9,8 +9,8 @@ import {rasterContext} from '../src/site/exchange';
 
 const fixture=()=>createDemoProject();
 /** A complete, valid PNG with incompressible pixels; no fake header/padding fixture. */
-function largePng(){
- const width=512,height=512,raw=Buffer.alloc((width*4+1)*height);let random=0x1a2b3c4d;
+function largePng(width=512,height=512){
+ const raw=Buffer.alloc((width*4+1)*height);let random=0x1a2b3c4d;
  for(let row=0;row<height;row++)for(let column=1;column<=width*4;column++){random^=random<<13;random^=random>>>17;random^=random<<5;raw[row*(width*4+1)+column]=random&255;}
  const table=Array.from({length:256},(_,n)=>{let crc=n;for(let bit=0;bit<8;bit++)crc=(crc&1)?0xedb88320^(crc>>>1):crc>>>1;return crc>>>0;});
  const chunk=(type:string,data:Buffer)=>{const length=Buffer.alloc(4);length.writeUInt32BE(data.length);const contents=Buffer.concat([Buffer.from(type),data]),check=Buffer.alloc(4);let crc=0xffffffff;for(const value of contents)crc=table[(crc^value)&255]^(crc>>>8);check.writeUInt32BE((crc^0xffffffff)>>>0);return Buffer.concat([length,contents,check]);};
@@ -58,6 +58,18 @@ describe('independent design proposals with a shared site base',()=>{
   const switched=switchDesignProposal(project,first,'editor');
   expect(switched.site!.contexts[0].placement.origin.x).toBe(11);expect(switched.site!.contexts[0].image!.dataUrl).toBe(dataUrl);
   expect(proposalProject(switched,switched.workbench!.proposals[1].id).site).toEqual(switched.site);
+ });
+
+ it('keeps style and furniture proposal-specific while sharing large interior references',()=>{
+  const original=fixture(),dataUrl=largePng(500,500);expect(dataUrl.length).toBeGreaterThan(1_000_000);
+  original.interior={schemaVersion:1,styleId:'japandi',placements:[],references:[{id:'style-reference',name:'Studio moodboard.png',styleId:'japandi',dataUrl}]};
+  let project=initializeDesignWorkbench(original,'editor');const first=project.workbench!.activeProposalId;
+  project=createDesignProposal(project,'Interior alternative','editor');const second=project.workbench!.activeProposalId;
+  project.interior!.styleId='modern';project.interior!.placements=[{id:'furniture-one',assetId:'ikea-micke-desk-73',roomId:'room-study',levelId:project.levels[0].id,x:2,y:2,rotation:0}];
+  expect(project.workbench!.proposals.every(item=>!item.modelJson.includes(dataUrl))).toBe(true);
+  const restored=switchDesignProposal(project,first,'editor');expect(restored.interior!.styleId).toBe('japandi');expect(restored.interior!.placements).toEqual([]);expect(restored.interior!.references).toEqual(original.interior.references);
+  const branch=proposalProject(restored,second);expect(branch.interior!.placements).toHaveLength(1);expect(branch.interior!.styleId).toBe('modern');expect(branch.interior!.references[0].dataUrl).toBe(dataUrl);
+  expect(projectSchema.safeParse(restored).success).toBe(true);
  });
 
  it('enforces editor roles, existing element/read-only/property locks and detached exact review baselines',()=>{

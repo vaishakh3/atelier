@@ -14,8 +14,9 @@ function author(project:Project,role:Role){
  if(project.constraints.lockedProperties.some(lock=>lock==='*'||lock==='workbench'||lock==='workbench.*'||lock==='model.workbench'||lock.startsWith('workbench.')))throw new Error('The design workbench is locked.');
 }
 function snapshot(project:Project):string{
- // Site/context is a shared live base, not duplicated into every architectural branch.
+ // Site/context and image references are a shared live base. Placement/style remain proposal-specific.
  const {workbench:_workbench,site:_site,...model}=project;
+ if(model.interior)model.interior={...model.interior,references:[]};
  const json=JSON.stringify(model);
  if(json.length>proposalSnapshotLimit||new TextEncoder().encode(json).byteLength>proposalSnapshotLimit)throw new Error('This architectural proposal exceeds the 1 MB snapshot limit. Simplify its model or split the project before creating or switching proposals. Shared site assets are stored separately.');
  if(hasNestedWorkbench(model))throw new Error('A design snapshot cannot contain nested workbench data.');
@@ -77,7 +78,11 @@ export function assertDesignSwitchUnlocked(project:Project,candidate:Project):vo
   if(!equal(before,after)&&before&&!before.editable)throw new Error(`${before.name} is a read-only reference and differs in this proposal.`);
   if(elementChangeLocked(project,before,after))throw new Error(`A locked element or property (${before?.name??after?.name??id}) differs in this proposal. Unlock it explicitly before switching.`);
  }
- for(const field of ['levels','grids','types','allowances','schedule','planning','services','units','currency','designLibrary']as const)if(!equal(project[field],candidate[field])&&project.constraints.lockedProperties.some(lock=>lock===field||lock===`${field}.*`||lock.startsWith(`${field}.`)||lock===`model.${field}`||lock.startsWith(`model.${field}.`)))throw new Error(`The ${field} data is locked and differs in this proposal.`);
+ for(const field of ['levels','grids','types','allowances','schedule','planning','services','interior','units','currency','designLibrary']as const)if(!equal(project[field],candidate[field])&&project.constraints.lockedProperties.some(lock=>lock===field||lock===`${field}.*`||lock.startsWith(`${field}.`)||lock===`model.${field}`||lock.startsWith(`model.${field}.`)))throw new Error(`The ${field} data is locked and differs in this proposal.`);
+}
+function restoreInteriorReferences(target:Project,live:Project):void{
+ if(!live.interior?.references.length&&!target.interior)return;
+ target.interior={...(target.interior??{schemaVersion:1,styleId:live.interior?.styleId??'japandi',placements:[],references:[]}),references:structuredClone(live.interior?.references??[])};
 }
 export function switchDesignProposal(project:Project,id:string,role:Role):Project{
  author(project,role);const state=saveCurrent(project,stateFor(project)),proposal=state.proposals.find(proposal=>proposal.id===id);
@@ -87,6 +92,7 @@ export function switchDesignProposal(project:Project,id:string,role:Role):Projec
  // Identity, audit and authorization constraints are live workspace state. Shared site base never rolls back.
  const candidate:Project={...saved,id:project.id,name:project.name,createdAt:project.createdAt,updatedAt:project.updatedAt,version:project.version,audit:structuredClone(project.audit),constraints:structuredClone(project.constraints),workbench:{...state,activeProposalId:id}};
  if(project.site)candidate.site=structuredClone(project.site);else delete candidate.site;
+ restoreInteriorReferences(candidate,project);
  assertDesignSwitchUnlocked(project,candidate);
  if(!equal(project.elements,candidate.elements)||!equal(project.types,candidate.types)||!equal(project.services,candidate.services)){
   candidate.schedule={...candidate.schedule,modelReviewRequired:true};delete candidate.schedule.modelReview;
@@ -100,6 +106,7 @@ export function proposalProject(project:Project,id:string):Project{
  const proposal=project.workbench?.proposals.find(proposal=>proposal.id===id);if(!proposal)throw new Error('The design proposal is unavailable.');
  const saved=parseDesignSnapshot(proposal.modelJson);
  if(project.site)saved.site=structuredClone(project.site);else delete saved.site;
+ restoreInteriorReferences(saved,project);
  return saved;
 }
 
