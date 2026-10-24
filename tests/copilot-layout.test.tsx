@@ -3,22 +3,22 @@ import {act,cleanup,fireEvent,render,screen,waitFor,within} from '@testing-libra
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import InspectorCopilot from '../src/components/InspectorCopilot';
 import LayoutProposalPreview from '../src/components/LayoutProposalPreview';
-import {createBlankProject} from '../src/domain/seed';
+import {createBlankProject,createDemoProject} from '../src/domain/seed';
 import {previewLayout} from '../src/domain/layout';
 import {applyProposal} from '../src/domain/transactions';
 import {DEFAULT_AI_MODEL} from '../src/domain/aiConfig';
 import {num} from '../src/components/ui';
 import type {AiProposal,LayoutProposal,Project} from '../src/domain/types';
 
-function layoutProposal(project:Project,selectedIds:string[]=[]):AiProposal {
+function layoutProposal(project:Project,selectedIds:string[]=[],patch:Partial<LayoutProposal>={}):AiProposal {
  const spec:LayoutProposal={levelId:project.levels[0].id,footprintId:selectedIds[0]??null,width:null,depth:null,idPrefix:'layout-ui-review',baselineVersion:project.version,rooms:[
   {key:'living',name:'Living room',use:'living',area:20,attachedTo:null},
   {key:'bedroom',name:'Primary bedroom',use:'bedroom',area:14,attachedTo:null},
   {key:'ensuite',name:'Attached bathroom',use:'bathroom',area:4.5,attachedTo:'bedroom'},
   {key:'bath',name:'Common bathroom',use:'bathroom',area:null,attachedTo:null},
- ]};
+ ],...patch};
  const output=previewLayout(project,spec);if(output.issues.length)throw new Error(output.issues.join(' '));
- return{id:spec.idPrefix,prompt:'Create a house layout',summary:'Proposed house with four requested rooms and connected circulation',kind:'layout',changes:[],issues:output.assumptions,selectedIds,model:DEFAULT_AI_MODEL,createdAt:'2026-10-24T12:00:00Z',layout:spec,creations:output.elements.map(after=>({elementId:after.id,before:null,after}))};
+ return{id:spec.idPrefix,prompt:'Create a house layout',summary:'Proposed house with four requested rooms and connected circulation',kind:'layout',changes:[],issues:output.assumptions,selectedIds,model:DEFAULT_AI_MODEL,createdAt:'2026-10-24T12:00:00Z',layout:spec,creations:output.elements.map(after=>({elementId:after.id,before:null,after})),levelCreations:output.levels.map(after=>({levelId:after.id,before:null,after})),removals:output.removedElements.map(before=>({elementId:before.id,before,after:null}))};
 }
 function response(value:unknown){return new Response(JSON.stringify(value),{status:200,headers:{'Content-Type':'application/json'}});}
 function provider(make=(project:Project,selectedIds:string[])=>layoutProposal(project,selectedIds)){
@@ -63,8 +63,9 @@ describe('reviewable copilot house layouts',()=>{
 
  it('accepts the complete hosted geometry exactly once after review and invokes the camera-fit callback',async()=>{
   const project=createBlankProject('Accepted house'),before=structuredClone(project),api=provider(),base=props(project),onApplied=vi.fn();
-  render(<InspectorCopilot {...base} onApplied={onApplied} getCurrentProject={()=>structuredClone(project)}/>);sendPrompt();
+  const view=render(<InspectorCopilot {...base} onApplied={onApplied} getCurrentProject={()=>structuredClone(project)}/>);sendPrompt();
   await screen.findByText('House layout preview');expect(project).toEqual(before);expect(base.commit).not.toHaveBeenCalled();
+  expect(screen.getByText('Construction plan')).toBeTruthy();expect(screen.getByText('Review activities')).toBeTruthy();expect(screen.queryByText('0 days')).toBeNull();
   fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog');
   fireEvent.click(within(dialog).getByRole('button',{name:'Accept layout'}));
   expect(base.commit).toHaveBeenCalledTimes(1);expect(onApplied).toHaveBeenCalledTimes(1);expect(screen.queryByRole('dialog')).toBeNull();expect(screen.queryByRole('button',{name:'Accept layout'})).toBeNull();
@@ -72,6 +73,8 @@ describe('reviewable copilot house layouts',()=>{
   expect(next.elements).toEqual(expected.creations!.map(creation=>creation.after));expect(next.version).toBe(project.version+1);expect(ids).toEqual(expected.creations!.map(creation=>creation.elementId));expect(action).toMatch(/Accepted AI proposal/);
   for(const opening of next.elements.filter(element=>element.hostId))expect(next.elements.find(element=>element.id===opening.hostId)?.kind).toBe('wall');
   expect(project).toEqual(before);expect(screen.getByText(/Changes applied. You can undo/)).toBeTruthy();
+  view.rerender(<InspectorCopilot {...base} project={next} onApplied={onApplied} getCurrentProject={()=>structuredClone(next)}/>);
+  expect(screen.getByRole('button',{name:/Improve house layout/})).toBeTruthy();
  });
 
  it('keeps a changed-model preview visible but disables accepting its stale revision',async()=>{
@@ -104,6 +107,109 @@ describe('reviewable copilot house layouts',()=>{
  it('cancels a pending pre-request save if the workspace closes',async()=>{
   const project=createBlankProject('Closing workspace'),api=provider(),base=props(project);let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),view=render(<InspectorCopilot {...base} beforeRequest={()=>gate}/>);
   sendPrompt();view.unmount();await act(async()=>{release();await gate;});expect(api.fetch).not.toHaveBeenCalled();
+ });
+
+ it('switches floor plans, dimensions and room schedules consistently in compact and expanded review',()=>{
+  const source=createBlankProject('Two-storey review'),proposal=layoutProposal(source,[],{storeys:2,floorHeight:3.2,rooms:[
+   {key:'living',name:'Ground living',use:'living',area:20,attachedTo:null,floor:0},
+   {key:'bath',name:'Ground bathroom',use:'bathroom',area:4.5,attachedTo:null,floor:0},
+   {key:'bedroom',name:'Upstairs bedroom',use:'bedroom',area:14,attachedTo:null,floor:1},
+   {key:'ensuite',name:'Upstairs ensuite',use:'bathroom',area:4.5,attachedTo:'bedroom',floor:1},
+  ]}),before=structuredClone(source),preview=applyProposal(source,proposal),upper=proposal.levelCreations![0].after;
+  const view=render(<LayoutProposalPreview source={source} preview={preview} proposal={proposal} disabled={false} onAccept={vi.fn()} onReject={vi.fn()}/>);
+  const compact=screen.getByRole('tablist',{name:'Proposed layout floors'}),upperTab=within(compact).getByRole('tab',{name:new RegExp(upper.name)});
+  expect(within(screen.getByRole('table',{name:'Proposed room dimensions'})).getByText('Ground living')).toBeTruthy();
+  expect(within(screen.getByRole('table',{name:'Proposed room dimensions'})).queryByText('Upstairs bedroom')).toBeNull();
+  fireEvent.click(upperTab);expect(upperTab.getAttribute('aria-selected')).toBe('true');
+  expect(within(screen.getByRole('table',{name:'Proposed room dimensions'})).getByText('Upstairs bedroom')).toBeTruthy();expect(screen.getByRole('img',{name:new RegExp('footprint dimensions · '+upper.name)})).toBeTruthy();
+  expect(screen.getByLabelText('New levels to create').textContent).toContain(upper.name);expect(screen.getByLabelText('Proposed stair connections').textContent).toContain(upper.name);
+  fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog'),fullTabs=within(dialog).getByRole('tablist',{name:'Proposed layout floors'});
+  expect(within(fullTabs).getByRole('tab',{name:new RegExp(upper.name)}).getAttribute('aria-selected')).toBe('true');
+  const upperRooms=within(dialog).getByRole('table',{name:'Proposed room dimensions'});expect(upperRooms.textContent).toContain('Upstairs bedroom');expect(upperRooms.textContent).not.toContain('Ground living');
+  expect(within(dialog).getByText(/not daylight, ventilation/)).toBeTruthy();expect(upperRooms.textContent).toContain('Exterior window');
+  fireEvent.keyDown(within(fullTabs).getByRole('tab',{name:new RegExp(upper.name)}),{key:'ArrowLeft'});
+  expect(within(dialog).getByRole('table',{name:'Proposed room dimensions'}).textContent).toContain('Ground living');
+  fireEvent.click(within(dialog).getByRole('button',{name:'Close dialog'}));
+  expect(within(compact).getByRole('tab',{name:new RegExp(source.levels[0].name)}).getAttribute('aria-selected')).toBe('true');expect(source).toEqual(before);
+  fireEvent.click(upperTab);const single=layoutProposal(source,[],{idPrefix:'single-after-multi',storeys:1}),singlePreview=applyProposal(source,single);
+  view.rerender(<LayoutProposalPreview source={source} preview={singlePreview} proposal={single} disabled={false} onAccept={vi.fn()} onReject={vi.fn()}/>);
+  expect(screen.getAllByRole('tab')).toHaveLength(1);expect(screen.getByRole('tab').getAttribute('aria-selected')).toBe('true');expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe(screen.getByRole('tab').id);
+ });
+
+ it('shows every replacement before acceptance and makes the exact stored objects inspectable',()=>{
+  const blank=createBlankProject('Existing concept'),first=layoutProposal(blank,[],{idPrefix:'original-concept'}),source=applyProposal(blank,first),before=structuredClone(source),proposal=layoutProposal(source,[],{idPrefix:'improved-concept',replaceConcept:true}),preview=applyProposal(source,proposal),onAccept=vi.fn();
+  expect(proposal.removals!.length).toBeGreaterThan(0);
+  render(<LayoutProposalPreview source={source} preview={preview} proposal={proposal} disabled={false} onAccept={onAccept} onReject={vi.fn()}/>);
+  const compact=screen.getByRole('region',{name:'Existing elements to replace'});
+  expect(compact.textContent).toContain(`Replaces ${proposal.removals!.length} existing concept elements`);
+  for(const removal of proposal.removals!)expect(compact.textContent).toContain(removal.elementId);
+  expect(onAccept).not.toHaveBeenCalled();expect(source).toEqual(before);
+  fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog'),removals=within(dialog).getByRole('region',{name:'Existing elements to replace'});
+  const plan=within(dialog).getByRole('tabpanel'),warning=within(dialog).getByRole('note',{name:'Replacement review warning'});
+  expect(warning.textContent).toContain(`Replaces ${proposal.removals!.length} existing concept elements`);expect(warning.compareDocumentPosition(plan)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();expect(plan.compareDocumentPosition(removals)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const scroll=vi.fn();removals.scrollIntoView=scroll;fireEvent.click(within(warning).getByRole('button',{name:'Review exact replacement objects'}));expect(scroll).toHaveBeenCalledWith({block:'start'});expect(document.activeElement).toBe(removals);
+  const firstRemoval=proposal.removals![0];fireEvent.click(within(removals).getByText('Exact before object · '+firstRemoval.elementId));
+  expect(JSON.parse(removals.querySelector('pre')!.textContent!)).toEqual(firstRemoval.before);expect(within(dialog).getByText(/Only the listed existing objects are replaced/)).toBeTruthy();
+  const scrollArea=within(dialog).getByRole('region',{name:'Created elements scroll area'});expect(scrollArea.getAttribute('tabindex')).toBe('0');expect(scrollArea.className).toContain('elements');
+  expect(within(scrollArea).getAllByRole('row')).toHaveLength(proposal.creations!.length+1);expect(within(scrollArea).getByRole('columnheader',{name:'Floor'})).toBeTruthy();
+  fireEvent.click(within(dialog).getByRole('button',{name:'Close dialog'}));expect(onAccept).not.toHaveBeenCalled();expect(source).toEqual(before);
+ });
+
+ it('accepts a replacement and new level as one transaction with complete affected IDs',async()=>{
+  const blank=createBlankProject('Replan transaction'),source=applyProposal(blank,layoutProposal(blank,[],{idPrefix:'previous-concept'})),before=structuredClone(source),base=props(source),onApplied=vi.fn();
+  let proposed:AiProposal|undefined;provider((project,ids)=>(proposed=layoutProposal(project,ids,{idPrefix:'new-two-floor-concept',replaceConcept:true,storeys:2,floorHeight:3.2})));
+  render(<InspectorCopilot {...base} getCurrentProject={()=>structuredClone(source)} onApplied={onApplied}/>);sendPrompt('Improve the existing concept into two storeys, keeping the current room programme');await screen.findByText('House layout preview');
+  expect(source).toEqual(before);expect(base.commit).not.toHaveBeenCalled();expect(proposed!.removals!.length).toBeGreaterThan(0);expect(proposed!.levelCreations).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button',{name:'Accept layout'}));expect(base.commit).toHaveBeenCalledTimes(1);expect(onApplied).toHaveBeenCalledTimes(1);expect(base.onSelect).not.toHaveBeenCalled();
+  const [next,,ids]=base.commit.mock.calls[0] as unknown as [Project,string,string[]];
+  expect(ids).toEqual([...new Set([...proposed!.creations!.map(creation=>creation.elementId),...proposed!.removals!.map(removal=>removal.elementId),...proposed!.levelCreations!.map(creation=>creation.levelId)])]);
+  expect(next.version).toBe(source.version+1);for(const removal of proposed!.removals!)expect(next.elements.some(element=>element.id===removal.elementId)).toBe(false);
+  expect(next.levels.some(level=>level.id===proposed!.levelCreations![0].levelId)).toBe(true);expect(source).toEqual(before);
+ });
+
+ it('offers an improvement prompt that preserves the actual programme and an explicit two-storey option',()=>{
+  const blank=createBlankProject('Current programme'),source=applyProposal(blank,layoutProposal(blank,[],{idPrefix:'current-concept'})),base=props(source),view=render(<InspectorCopilot {...base}/>);
+  const improve=screen.getByRole('button',{name:/Improve house layout/});expect((improve as HTMLButtonElement).disabled).toBe(false);fireEvent.click(improve);
+  const input=screen.getByRole('textbox',{name:'Ask the BIM copilot'}) as HTMLTextAreaElement;expect(input.value).toMatch(/Keep the current requested room programme/);expect(input.value).toMatch(/retain the current storey count/);expect(input.value).not.toMatch(/three bedrooms|a kitchen, a dining/);
+  fireEvent.click(screen.getByRole('button',{name:/Explore two storeys/}));expect(input.value).toMatch(/explore a two-storey arrangement with a connected stair/);expect(input.value).toMatch(/Do not substitute a new room programme/);
+  const manual=createDemoProject();view.rerender(<InspectorCopilot {...base} project={manual} activeLevelId={manual.levels[0].id}/>);expect(screen.queryByRole('button',{name:/Improve house layout/})).toBeNull();expect((screen.getByRole('button',{name:/Create a house layout/}) as HTMLButtonElement).disabled).toBe(true);
+ });
+
+ it('replans the whole house when an upper slab piece is selected instead of using that tile as a footprint',()=>{
+  const blank=createBlankProject('Upper-floor concept'),source=applyProposal(blank,layoutProposal(blank,[],{idPrefix:'two-floor-existing',storeys:2})),upper=source.elements.find(element=>element.kind==='slab'&&element.levelId!==source.levels[0].id)!;
+  expect(upper.properties.layoutBaseLevelId).toBe(source.levels[0].id);
+  const base=props(source);render(<InspectorCopilot {...base} selectedIds={[upper.id]} activeLevelId={upper.levelId}/>);
+  fireEvent.click(screen.getByRole('button',{name:/Improve house layout/}));expect(base.onSelect).toHaveBeenCalledWith([]);
+  const prompt=(screen.getByRole('textbox',{name:'Ask the BIM copilot'}) as HTMLTextAreaElement).value;
+  expect(prompt).toMatch(/whole house from its original base level/);expect(prompt).toMatch(/instead of the selected upper slab piece/);expect(prompt).not.toMatch(/using the selected concept slab as its footprint/);expect(prompt).toMatch(/Keep the current requested room programme/);
+ });
+
+ it('shows measured compact-hub metrics in display units without implying walking-distance or daylight analysis',()=>{
+  const source=createBlankProject('Measured hub');source.units='ft';const programme:LayoutProposal['rooms']=[
+   {key:'bed1',name:'Bedroom one',use:'bedroom',area:14,attachedTo:null},{key:'bath1',name:'Ensuite one',use:'bathroom',area:4.5,attachedTo:'bed1'},
+   {key:'bed2',name:'Bedroom two',use:'bedroom',area:14,attachedTo:null},{key:'bath2',name:'Ensuite two',use:'bathroom',area:4.5,attachedTo:'bed2'},
+   {key:'bed3',name:'Bedroom three',use:'bedroom',area:14,attachedTo:null},{key:'bath3',name:'Ensuite three',use:'bathroom',area:4.5,attachedTo:'bed3'},
+   {key:'kitchen',name:'Kitchen',use:'kitchen',area:10,attachedTo:null},{key:'library',name:'Library',use:'study',area:9,attachedTo:null},{key:'pool',name:'Pool zone',use:'pool',area:24,attachedTo:null},
+  ],proposal=layoutProposal(source,[],{rooms:programme,idPrefix:'measured-hub'}),measured=previewLayout(source,proposal.layout!),before=structuredClone(source),preview=applyProposal(source,proposal);
+  expect(measured.strategy).toBe('compact-hub');expect(measured.metrics!.hubArea).toBeGreaterThan(0);
+  render(<LayoutProposalPreview source={source} preview={preview} proposal={proposal} disabled={false} onAccept={vi.fn()} onReject={vi.fn()}/>);
+  const compact=screen.getByRole('region',{name:'Whole-house planning metrics'});expect(within(compact).getByText('Compact hub')).toBeTruthy();expect(compact.textContent).toContain('Whole house · all floors');
+  expect(compact.textContent).toContain(`${num(measured.metrics!.hubArea*10.7639104167,1)} ft²`);expect(compact.textContent).toContain(`${(measured.metrics!.longestAccessBranch*3.280839895).toFixed(2)} ft`);
+  fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog'),full=within(dialog).getByRole('region',{name:'Whole-house planning metrics'}),plan=within(dialog).getByRole('tabpanel');
+  expect(plan.compareDocumentPosition(full)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();expect(full.textContent).toContain(`${num(measured.metrics!.circulationRatio*100,1)}%`);expect(full.textContent).toContain('not walking distance');expect(within(full).getByText('Dedicated circulation area / share')).toBeTruthy();expect(full.textContent).toContain('excludes paths within requested living/dining rooms');expect(full.textContent).toContain('not daylight analysis');expect(source).toEqual(before);
+ });
+
+ it('labels the genuinely constrained gallery fixture without presenting it as a compact hub',()=>{
+  const source=createBlankProject('Constrained gallery'),type=source.types.find(type=>type.kind==='slab')!;source.elements.push({id:'fixed-slab',kind:'slab',name:'Retained surveyed footprint',levelId:source.levels[0].id,typeId:type.id,material:type.material,x:24,y:-7,z:-.2,width:10.4,depth:14,height:.2,rotation:27,editable:true,properties:{}});
+  const rooms:LayoutProposal['rooms']=[
+   {key:'bed1',name:'Bedroom one',use:'bedroom',area:14,attachedTo:null},{key:'bath1',name:'Ensuite one',use:'bathroom',area:4.5,attachedTo:'bed1'},
+   {key:'bed2',name:'Bedroom two',use:'bedroom',area:14,attachedTo:null},{key:'bath2',name:'Ensuite two',use:'bathroom',area:4.5,attachedTo:'bed2'},
+   {key:'bed3',name:'Bedroom three',use:'bedroom',area:14,attachedTo:null},{key:'bath3',name:'Ensuite three',use:'bathroom',area:4.5,attachedTo:'bed3'},
+   {key:'kitchen',name:'Kitchen',use:'kitchen',area:10,attachedTo:null},{key:'library',name:'Library',use:'study',area:9,attachedTo:null},{key:'pool',name:'Pool zone',use:'pool',area:24,attachedTo:null},
+  ],proposal=layoutProposal(source,['fixed-slab'],{rooms,idPrefix:'gallery-review'}),measured=previewLayout(source,proposal.layout!),before=structuredClone(source);
+  expect(measured.strategy).toBe('zoned-gallery');expect(measured.metrics!.hubArea).toBe(0);
+  render(<LayoutProposalPreview source={source} preview={applyProposal(source,proposal)} proposal={proposal} disabled={false} onAccept={vi.fn()} onReject={vi.fn()}/>);
+  const summary=screen.getByRole('region',{name:'Whole-house planning metrics'});expect(within(summary).getByText('Zoned gallery')).toBeTruthy();expect(within(summary).queryByText('Compact hub')).toBeNull();expect(summary.textContent).toContain('Uses gallery circulation');expect(summary.textContent).toContain('0 m²');expect(source).toEqual(before);
  });
 
  it('shows the current connection model without rewriting a historical proposal model',async()=>{

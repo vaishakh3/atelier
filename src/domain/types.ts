@@ -21,13 +21,15 @@ export type Objective = 'tradeoffs'|'cost'|'time';
 export interface Scenario { id:string; name:string; baselineVersion:number; changes:string[]; crews:number; procurementDays:number; typeChanges:Record<string,string>; cost:CostResult; schedule:ScheduleResult; feasible:boolean; reasons:string[]; dominated:boolean; sequenceAlternativeId?:string; sequenceChanges?:{activityId:string;before:string[];after:string[]}[]; sequenceRationale?:string; searchInfo?:{evaluated:number;totalCandidates:number;limit:number;truncated:boolean;approvedSequenceIds:string[]}; }
 export interface ElementChange { elementId:string; before:Partial<BimElement>; after:Partial<BimElement>; }
 export interface ElementCreation {elementId:string;before:null;after:BimElement}
+export interface ElementRemoval {elementId:string;before:BimElement;after:null}
+export interface LevelCreation {levelId:string;before:null;after:Level}
 export interface RepetitionProposal {sourceIds:string[];count:number;offsetX:number;offsetY:number;idPrefix:string;sources:BimElement[]}
 export type LayoutUse = 'bedroom'|'bathroom'|'living'|'kitchen'|'dining'|'theater'|'pool'|'study'|'utility'|'garage'|'other';
-export interface LayoutRoom {key:string;name:string;use:LayoutUse;area:number|null;attachedTo:string|null}
-export interface LayoutSpec {levelId:string;footprintId:string|null;width:number|null;depth:number|null;rooms:LayoutRoom[]}
+export interface LayoutRoom {key:string;name:string;use:LayoutUse;area:number|null;attachedTo:string|null;floor?:0|1|null}
+export interface LayoutSpec {levelId:string;footprintId:string|null;width:number|null;depth:number|null;rooms:LayoutRoom[];storeys?:1|2|null;floorHeight?:number|null;replaceConcept?:boolean|null}
 export interface LayoutRequest extends LayoutSpec {idPrefix:string}
 export interface LayoutProposal extends LayoutRequest {baselineVersion:number}
-export interface AiProposal { id:string; prompt:string; summary:string; kind:'edit'|'analysis'|'schedule'|'repetition'|'layout'; changes:ElementChange[]; issues:string[]; selectedIds:string[]; model:string; createdAt:string; crewCount?:number; repetition?:RepetitionProposal;layout?:LayoutProposal;creations?:ElementCreation[]; }
+export interface AiProposal { id:string; prompt:string; summary:string; kind:'edit'|'analysis'|'schedule'|'repetition'|'layout'; changes:ElementChange[]; issues:string[]; selectedIds:string[]; model:string; createdAt:string; crewCount?:number; repetition?:RepetitionProposal;layout?:LayoutProposal;creations?:ElementCreation[];levelCreations?:LevelCreation[];removals?:ElementRemoval[]; }
 export interface SavedVersion { id:string; label:string; actor:string; timestamp:string; project:Project; }
 export interface ImportReport { schema:string; imported:number; referenceOnly:number; excluded:number; classes:{name:string; count:number; editable:number; referenceOnly:number}[]; warnings:string[]; source?:{schema:string;entityCount:number;lengthUnitScale:number;unitsDeclared:boolean}; }
 export interface ReviewComment { id:string; versionId:string; author:string; text:string; createdAt:string; }

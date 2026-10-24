@@ -1,5 +1,6 @@
 import {afterEach,describe,it,expect,vi} from 'vitest';
 import {APIConnectionTimeoutError} from 'openai/error';
+import {zodTextFormat} from 'openai/helpers/zod';
 const provider=vi.hoisted(()=>({status:401,calls:0,response:null as unknown,options:null as unknown,error:null as unknown,requests:[] as Record<string,unknown>[] }));
 vi.mock('openai',()=>({default:class {constructor(options:unknown){provider.options=options;}responses={parse:async(request:Record<string,unknown>)=>{provider.calls++;provider.requests.push(request);if(provider.error)throw provider.error;if(provider.response)return provider.response;throw{status:provider.status,message:'Sensitive provider diagnostic: synthetic-credential-do-not-echo'};}};}}));
 import {requestProposal,buildProposal,AI_REQUEST_TIMEOUT_MS,AI_MAX_OUTPUT_TOKENS} from '../server/copilot';
@@ -7,7 +8,7 @@ import {DEFAULT_AI_MODEL,resolveAiModel,aiModelLabel} from '../src/domain/aiConf
 import {createDemoProject,createBlankProject} from '../src/domain/seed';
 import {aiOutputSchema} from '../src/domain/schema';
 import {applyProposal} from '../src/domain/transactions';
-import type {LayoutSpec} from '../src/domain/types';
+import type {BimElement,LayoutSpec} from '../src/domain/types';
 afterEach(()=>{vi.unstubAllEnvs();provider.calls=0;provider.response=null;provider.options=null;provider.error=null;provider.requests=[];});
 const input=()=>({prompt:'Explain project',selectedIds:[],project:createDemoProject()});
 describe('provider failures remain distinct from local account authentication',()=>{
@@ -54,7 +55,7 @@ describe('supported house creation through structured provider operations',()=>{
   vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');vi.stubEnv('OPENAI_MODEL','');provider.response={status:'completed',output_parsed:layoutOutput()};
   const project=createBlankProject('New house'),before=structuredClone(project),proposal=await requestProposal({project,selectedIds:[],activeLevelId:'level-0',prompt:'Make a house. small house. 2 bedrooms with attached bathrooms, 1 common bathroom, 1 living room, 1 home theater, 1 indoor swimming pool.'});
   expect(proposal.kind).toBe('layout');expect(proposal.model).toBe(DEFAULT_AI_MODEL);expect(proposal.layout).toMatchObject({baselineVersion:project.version,footprintId:null,width:null,depth:null});expect(proposal.changes).toEqual([]);expect(project).toEqual(before);
-  const elements=proposal.creations!.map(item=>item.after),programRooms=elements.filter(element=>element.kind==='room'&&element.properties.layoutKey!=='circulation');expect(programRooms).toHaveLength(8);expect(programRooms.filter(element=>element.properties.use==='bedroom')).toHaveLength(2);expect(programRooms.filter(element=>element.properties.use==='bathroom')).toHaveLength(3);expect(programRooms.find(element=>element.properties.use==='pool')?.properties.reservedZone).toBe(true);
+  const elements=proposal.creations!.map(item=>item.after),programRooms=elements.filter(element=>element.kind==='room'&&element.properties.layoutKey!=='circulation'&&element.properties.use!=='circulation');expect(programRooms).toHaveLength(8);expect(programRooms.filter(element=>element.properties.use==='bedroom')).toHaveLength(2);expect(programRooms.filter(element=>element.properties.use==='bathroom')).toHaveLength(3);expect(programRooms.find(element=>element.properties.use==='pool')?.properties.reservedZone).toBe(true);
   expect(elements.some(element=>element.kind==='wall')).toBe(true);expect(elements.some(element=>element.kind==='door')).toBe(true);expect(elements.some(element=>element.kind==='window')).toBe(true);expect(proposal.issues.join(' ')).toMatch(/reserved room zone|specialist/i);expect(proposal.issues.join(' ')).toMatch(/Unspecified room areas/);expect(elements.length).toBeLessThanOrEqual(200);
   const accepted=applyProposal(project,proposal);expect(accepted.elements).toEqual(elements);expect(accepted.version).toBe(project.version+1);expect(project).toEqual(before);
  });
@@ -62,5 +63,71 @@ describe('supported house creation through structured provider operations',()=>{
   const project=createBlankProject('Selected footprint'),source=createDemoProject().elements.find(element=>element.kind==='slab')!;project.elements=[{...source,id:'selected-footprint',levelId:'level-0',x:10,y:20,width:16,depth:20,rotation:25}];const original=structuredClone(project),layout={...houseProgram,footprintId:'selected-footprint'},input={project,selectedIds:['selected-footprint'],activeLevelId:'level-0',prompt:'Create the requested house on this slab'};
   const proposal=buildProposal(layoutOutput(layout),input,DEFAULT_AI_MODEL),accepted=applyProposal(project,proposal);expect(project).toEqual(original);expect(accepted.elements.find(element=>element.id==='selected-footprint')).toEqual(original.elements[0]);expect(proposal.creations!.every(item=>item.elementId!=='selected-footprint')).toBe(true);
   expect(()=>buildProposal(layoutOutput(layout),{...input,selectedIds:[]},DEFAULT_AI_MODEL)).toThrow(/Select.*slab/);expect(()=>buildProposal(layoutOutput(),input,DEFAULT_AI_MODEL)).toThrow(/exact selected slab/);expect(()=>buildProposal({...layoutOutput(layout),operations:[...layoutOutput(layout).operations,...layoutOutput(layout).operations]},input,DEFAULT_AI_MODEL)).toThrow(/separate preview/);
+ });
+});
+
+
+describe('two-storey and replan provider contract',()=>{
+ it('produces the real strict OpenAI schema with required nullable additions while accepting old stored programs',()=>{
+  const format=zodTextFormat(aiOutputSchema,'bim_proposal'),schema=JSON.parse(JSON.stringify(format.schema));
+  const create=schema.properties.operations.items.anyOf.find((value:any)=>value.properties.action.const==='create-layout').properties.layout;
+  expect(format.strict).toBe(true);expect(create.required).toEqual(expect.arrayContaining(['storeys','floorHeight','replaceConcept']));expect(create.properties.rooms.items.required).toContain('floor');
+  for(const key of ['storeys','floorHeight','replaceConcept'])expect(JSON.stringify(create.properties[key])).toContain('null');expect(JSON.stringify(create.properties.rooms.items.properties.floor)).toContain('null');
+  expect(layoutOutput().operations).toHaveLength(1);
+ });
+
+ it('delegates unspecified new two-storey floor assignments to residential zoning rather than inventing guest-floor constraints',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');
+  const bedrooms=Array.from({length:4},(_,index)=>[{key:`bed-${index+1}`,name:`Bedroom ${index+1}`,use:'bedroom' as const,area:null,attachedTo:null,floor:null},{key:`ensuite-${index+1}`,name:`Ensuite ${index+1}`,use:'bathroom' as const,area:null,attachedTo:`bed-${index+1}`,floor:null}]).flat();
+  const facilities:LayoutSpec['rooms']=[{key:'living',name:'Living',use:'living',area:null,attachedTo:null,floor:null},{key:'dining',name:'Dining',use:'dining',area:null,attachedTo:null,floor:null},{key:'kitchen',name:'Kitchen',use:'kitchen',area:null,attachedTo:null,floor:null},{key:'utility',name:'Utility',use:'utility',area:null,attachedTo:null,floor:null},{key:'common-bath',name:'Common bathroom',use:'bathroom',area:null,attachedTo:null,floor:null}];
+  provider.response={status:'completed',output_parsed:layoutOutput({...houseProgram,storeys:2,replaceConcept:false,rooms:[...bedrooms,...facilities]})};
+  const project=createBlankProject('Four-bedroom concept'),before=structuredClone(project),p=await requestProposal({project,selectedIds:[],prompt:'Make a new four-bedroom two-storey house. Other details according to your liberty.'}),instructions=String(provider.requests[0].instructions);
+  expect(instructions).toContain('For NEW two-storey creation, set room.floor:null for EVERY requested or proposed program room unless the user explicitly specifies');
+  expect(instructions).toContain('are not explicit floor constraints');expect(instructions).toContain('proposed facilities also use floor:null');expect(instructions).toContain('engine-proposed zoning');
+  expect(instructions).toContain('Preserve an explicitly requested ground-floor bedroom');expect(instructions).toContain('Preserve existing floor wishes during replanning');
+  expect(p.layout!.rooms).toHaveLength(13);expect(p.layout!.rooms.every(room=>room.floor===null)).toBe(true);
+  const upper=p.levelCreations![0].levelId,bedroomElements=p.creations!.filter(item=>item.after.kind==='room'&&item.after.properties.use==='bedroom');
+  expect(bedroomElements).toHaveLength(4);expect(bedroomElements.every(item=>item.after.levelId===upper)).toBe(true);expect(project).toEqual(before);
+ });
+
+ it('sends the complete existing program and actual floor provenance without merging another house or circulation',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');provider.response={status:'completed',output_parsed:{summary:'Analysis only',operations:[],issues:[]}};
+  const project=createBlankProject('Existing nine-room home');project.levels.push({id:'upper',name:'Upper floor',elevation:3.2},{id:'other-base',name:'Other building',elevation:20});
+  const room=(key:string,name:string,use:string,floor:0|1,attachedTo:string|null=null,generation='existing-house'):BimElement=>({id:`${generation}-room-${key}`,kind:'room',name,levelId:generation==='other-house'?'other-base':floor===1?'upper':'level-0',typeId:'room-default',material:'Not applicable',x:0,y:0,z:floor*3.2,width:4,depth:4,height:.02,rotation:0,editable:true,properties:{conceptLayout:true,conceptGeneration:generation,layoutBaseLevelId:generation==='other-house'?'other-base':'level-0',layoutStoreys:generation==='other-house'?1:2,floorIndex:floor,layoutKey:key,use,requestedArea:use==='bathroom'?4.5:16,...(attachedTo?{attachedTo}:{})}});
+  project.elements=[room('bed-1','Bedroom 1','bedroom',1),room('bed-2','Bedroom 2','bedroom',1),room('bed-3','Bedroom 3','bedroom',1),room('bath-1','Attached bathroom 1','bathroom',1,'bed-1'),room('bath-2','Attached bathroom 2','bathroom',1,'bed-2'),room('bath-3','Common bathroom','bathroom',0),room('kitchen','Kitchen','kitchen',0),room('library','Library','study',0),room('pool','Swimming pool zone','pool',0),room('circulation','Generated circulation','circulation',0),room('other','Other building bedroom','bedroom',0,null,'other-house')];
+  const original=structuredClone(project);await requestProposal({project,selectedIds:[],activeLevelId:'upper',prompt:'Improve the existing two-storey house while keeping all rooms'});
+  const request=provider.requests[0],sent=JSON.parse(String(request.input));expect(sent.capabilities.createLayout.storeys).toEqual([1,2]);expect(sent.capabilities.createLayout.manualGeometryReplacement).toBe(false);
+  expect(sent.existingRoomProgram).toHaveLength(9);expect(sent.existingRoomProgram.map((item:any)=>item.name)).toContain('Library');expect(sent.existingRoomProgram.some((item:any)=>item.name.includes('Other building')||item.use==='circulation')).toBe(false);
+  expect(sent.existingConceptContext.target).toMatchObject({generation:'existing-house',baseLevelId:'level-0',storeys:2});expect(sent.existingConceptContext.ambiguous).toBe(false);
+  expect(sent.existingRoomProgram.find((item:any)=>item.key==='bath-1')).toMatchObject({attachedTo:'bed-1',floor:1,levelId:'upper',levelElevation:3.2,area:4.5});
+  expect(String(request.instructions)).toContain('preserve every existing program room');expect(String(request.instructions)).toContain('Never combine distinct generation groups');expect(String(request.instructions)).toContain('do not claim daylight optimization');expect(String(request.instructions)).toContain('use width:null and depth:null by default');expect(String(request.instructions)).toContain('old model dimensions are context');expect(String(request.instructions)).toContain('do not promise a compact hub');expect(()=>buildProposal(layoutOutput({...houseProgram,levelId:'other-base',replaceConcept:true}),{project,selectedIds:[],activeLevelId:'upper',prompt:'Improve the current house'},DEFAULT_AI_MODEL)).toThrow(/different concept building/);expect(project).toEqual(original);
+ });
+
+ it('does not merge repeated houses that inherited the same generation marker and room keys',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');provider.response={status:'completed',output_parsed:{summary:'Select a bounded footprint',operations:[],issues:[]}};
+  const project=createBlankProject('Copied concepts');const room:BimElement={id:'source-room-bed',kind:'room',name:'Bedroom',levelId:'level-0',typeId:'room-default',material:'Not applicable',x:1,y:1,z:0,width:4,depth:4,height:.02,rotation:0,editable:true,properties:{conceptLayout:true,conceptGeneration:'same-generation',layoutBaseLevelId:'level-0',layoutStoreys:1,floorIndex:0,layoutKey:'bed',use:'bedroom'}};project.elements=[room,{...structuredClone(room),id:'translated-copy',x:100}];
+  const context={project,selectedIds:[],activeLevelId:'level-0',prompt:'Improve the existing concept'};await requestProposal(context);let sent=JSON.parse(String(provider.requests[0].input));expect(sent.existingConceptContext.ambiguous).toBe(true);expect(sent.existingRoomProgram).toEqual([]);expect(()=>buildProposal(layoutOutput({...houseProgram,replaceConcept:true}),context,DEFAULT_AI_MODEL)).toThrow(/More than one concept/);
+  project.elements.push({id:'selected-boundary',kind:'slab',name:'Ground boundary',levelId:'level-0',typeId:'slab-concrete',material:'Reinforced concrete',x:0,y:0,z:-.2,width:10,depth:10,height:.2,rotation:0,editable:true,properties:{}});await requestProposal({...context,selectedIds:['selected-boundary']});sent=JSON.parse(String(provider.requests[1].input));expect(sent.existingConceptContext.ambiguous).toBe(false);expect(sent.existingRoomProgram).toHaveLength(1);expect(sent.existingRoomProgram[0].elementId).toBe(room.id);
+ });
+
+ it('proposes both floors and a separately reviewed level without canonical mutation',()=>{
+  const project=createBlankProject('Two-storey house'),before=structuredClone(project),spec:LayoutSpec={...houseProgram,storeys:2,floorHeight:3.2,replaceConcept:false,rooms:houseProgram.rooms.map(room=>({...room,floor:room.use==='bedroom'||room.attachedTo?1:0}))};
+  const p=buildProposal(layoutOutput(spec),{project,selectedIds:[],activeLevelId:'level-0',prompt:'Make a two-storey house with both bedrooms and attached bathrooms upstairs'},DEFAULT_AI_MODEL);
+  expect(p.levelCreations).toHaveLength(1);expect(p.removals).toEqual([]);expect(p.summary).toMatch(/2-storey/);expect(p.issues.join(' ')).toMatch(/exterior.window.*proxy/i);expect(project).toEqual(before);
+  const accepted=applyProposal(project,p);expect(accepted.levels).toHaveLength(2);expect(accepted.elements.some(element=>element.kind==='stair')).toBe(true);expect(accepted.version).toBe(project.version+1);
+ });
+
+ it('rejects a selected upper concept slab piece with clear guidance while allowing a manual upper footprint creation',()=>{
+  const blank=createBlankProject('Upper piece'),first=buildProposal(layoutOutput({...houseProgram,storeys:2,floorHeight:3.2}),{project:blank,selectedIds:[],prompt:'Create two storeys'},DEFAULT_AI_MODEL),project=applyProposal(blank,first),upper=project.levels.find(level=>level.id!=='level-0')!,piece=project.elements.find(element=>element.kind==='slab'&&element.levelId===upper.id)!;
+  expect(()=>buildProposal(layoutOutput({...houseProgram,levelId:upper.id,footprintId:piece.id,storeys:2,replaceConcept:true}),{project,selectedIds:[piece.id],activeLevelId:upper.id,prompt:'Improve the entire house'},DEFAULT_AI_MODEL)).toThrow(/Clear the selection.*whole house/);
+  const valid=buildProposal(layoutOutput({...houseProgram,storeys:2,replaceConcept:true}),{project,selectedIds:[],activeLevelId:upper.id,prompt:'Improve the entire house'},DEFAULT_AI_MODEL),forged=structuredClone(valid);forged.selectedIds=[piece.id];forged.layout!.footprintId=piece.id;forged.layout!.levelId=upper.id;expect(()=>applyProposal(project,forged)).toThrow(/Clear the selection.*whole house/);
+  const manual=createBlankProject('Manual upper footprint');manual.levels.push(upper);const footprint:BimElement={id:'manual-upper-footprint',kind:'slab',name:'Authored upper slab',levelId:upper.id,typeId:'slab-concrete',material:'Reinforced concrete',x:0,y:0,z:upper.elevation-.2,width:16,depth:20,height:.2,rotation:0,editable:true,properties:{}};manual.elements=[footprint];const p=buildProposal(layoutOutput({...houseProgram,levelId:upper.id,footprintId:footprint.id,storeys:1,replaceConcept:false}),{project:manual,selectedIds:[footprint.id],activeLevelId:upper.id,prompt:'Create a single-floor plan on this upper slab'},DEFAULT_AI_MODEL);expect(p.levelCreations).toEqual([]);expect(p.removals).toEqual([]);expect(p.creations!.every(item=>item.after.levelId===upper.id)).toBe(true);expect(applyProposal(manual,p).elements.find(element=>element.id===footprint.id)).toEqual(footprint);
+ });
+
+ it('replans from the upper active view using the house base and keeps its storeys when unspecified',()=>{
+  const blank=createBlankProject('Replan existing house'),first=buildProposal(layoutOutput({...houseProgram,storeys:2,floorHeight:3.2,rooms:houseProgram.rooms.map(room=>({...room,floor:room.use==='bedroom'||room.attachedTo?1:0}))}),{project:blank,selectedIds:[],prompt:'Create the complete house with two storeys'},DEFAULT_AI_MODEL),project=applyProposal(blank,first),upper=project.levels.find(level=>level.id!=='level-0')!;
+  const before=structuredClone(project),replan=buildProposal(layoutOutput({...houseProgram,levelId:upper.id,storeys:null,floorHeight:3.2,replaceConcept:true,rooms:houseProgram.rooms.map(room=>({...room,floor:room.use==='bedroom'||room.attachedTo?1:0}))}),{project,selectedIds:[],activeLevelId:upper.id,prompt:'Improve the existing house, keeping all rooms and both floors'},DEFAULT_AI_MODEL);
+  expect(replan.layout).toMatchObject({levelId:'level-0',storeys:2,replaceConcept:true});expect(replan.removals!.length).toBeGreaterThan(0);expect(replan.levelCreations).toEqual([]);expect(replan.summary).toMatch(/Replan.*2-storey.*replaced concept elements/);expect(project).toEqual(before);
+  const accepted=applyProposal(project,replan);expect(accepted.levels).toHaveLength(2);expect(accepted.elements.filter(element=>element.kind==='room'&&houseProgram.rooms.some(room=>room.key===element.properties.layoutKey))).toHaveLength(8);
  });
 });

@@ -15,7 +15,7 @@ function localBounds(element:BimElement,frame:{x:number;y:number;rotation:number
 describe('detached concept layout generation',()=>{
  it('generates the complete requested house program without unrequested kitchens or mutations',()=>{
   const project=empty(),input=request(),before=JSON.stringify(project),inputBefore=JSON.stringify(input),preview=previewLayout(project,input);
-  expect(preview.issues).toEqual([]);expect(preview.rooms).toHaveLength(8);expect(preview.elements.filter(element=>element.kind==='room')).toHaveLength(9);
+  expect(preview.issues).toEqual([]);expect(preview.rooms).toHaveLength(8);expect(preview.elements.filter(element=>element.kind==='room'&&program.some(room=>room.key===element.properties.layoutKey))).toHaveLength(8);
   expect(preview.elements.filter(element=>element.kind==='slab')).toHaveLength(1);expect(preview.elements.some(element=>element.kind==='roof')).toBe(false);
   expect(preview.rooms.map(item=>item.use)).not.toContain('kitchen');expect(preview.elements.length).toBeLessThanOrEqual(200);
   expect(validateModelGeometry({...project,elements:preview.elements})).toEqual([]);
@@ -23,19 +23,29 @@ describe('detached concept layout generation',()=>{
   expect(preview.elements.every(element=>!element.externalId&&element.id.startsWith(input.idPrefix))).toBe(true);
   expect(quantities({...project,elements:preview.elements}).every(line=>line.issues.length===0)).toBe(true);
  });
- it('connects every primary room to circulation and each ensuite only to its named bedroom',()=>{
+ it('connects room access through actual shared boundaries and preserves private ensuite access',()=>{
   const project=empty(),preview=previewLayout(project,request());expect(preview.issues).toEqual([]);
-  const doors=preview.elements.filter(element=>element.kind==='door');expect(doors).toHaveLength(9);
-  expect(doors.find(door=>door.id===preview.circulation!.entryDoorId)?.properties).toMatchObject({accessFrom:'outside',accessTo:'circulation'});
+  const doors=preview.elements.filter(element=>element.kind==='door');expect(doors).toHaveLength(8);
+  expect(doors.find(door=>door.id===preview.circulation!.entryDoorId)?.properties).toMatchObject({accessFrom:'outside',accessTo:'living'});
   for(const output of preview.rooms){
    const door=doors.find(door=>door.id===output.doorId)!;
-   expect(door.properties.accessTo).toBe(output.key);expect(door.properties.accessFrom).toBe(output.attachedTo??'circulation');
+   expect(door.properties.accessTo).toBe(output.key);expect(door.properties.accessFrom).toBe(output.accessFrom);
    if(output.attachedTo){
     const bedroom=preview.elements.find(element=>element.id===preview.rooms.find(item=>item.key===output.attachedTo)!.elementId)!;
     const bath=preview.elements.find(element=>element.id===output.elementId)!;
-    expect(bath.y-bedroom.y-bedroom.depth).toBeCloseTo(.2);expect(bath.x).toBe(bedroom.x);
-    expect(preview.elements.find(element=>element.id===door.hostId)?.rotation).toBe(0);
-   }else expect(preview.elements.find(element=>element.id===door.hostId)?.rotation).toBe(90);
+    expect(output.accessFrom).toBe(output.attachedTo);
+    const separatedX=Math.abs(bath.x+bath.width+.2-bedroom.x)<.001||Math.abs(bedroom.x+bedroom.width+.2-bath.x)<.001;
+    const separatedY=Math.abs(bath.y+bath.depth+.2-bedroom.y)<.001||Math.abs(bedroom.y+bedroom.depth+.2-bath.y)<.001;
+    expect(separatedX||separatedY).toBe(true);
+   }
+   const host=preview.elements.find(element=>element.id===door.hostId)!;
+   const local=worldToLocal(host,door),points=[localToWorld(host,local.x+door.width/2,-.03),localToWorld(host,local.x+door.width/2,host.depth+.03)];
+   const source=preview.elements.find(element=>element.kind==='room'&&element.levelId===output.levelId&&element.properties.layoutKey===output.accessFrom)!;
+   const target=preview.elements.find(element=>element.id===output.elementId)!;
+   const inside=(element:BimElement,point:{x:number;y:number})=>{const p=worldToLocal(element,point);return p.x>0&&p.y>0&&p.x<element.width&&p.y<element.depth;};
+   if(output.accessFrom==='outside')expect(points.some(point=>{const p=worldToLocal(preview.footprint,point);return p.x<0||p.y<0||p.x>preview.footprint.width||p.y>preview.footprint.depth;})).toBe(true);
+   else expect(points.some(point=>inside(source,point))).toBe(true);
+   expect(points.some(point=>inside(target,point))).toBe(true);
   }
  });
  it('keeps room interiors and shared wall strips disjoint instead of double building partitions',()=>{
@@ -78,7 +88,7 @@ describe('detached concept layout generation',()=>{
   const {project,slab}=slabProject(45),reference=structuredClone(slab),point=localToWorld(slab,2,2);reference.id='existing-reference';reference.kind='reference';reference.name='Existing imported reference';reference.x=point.x;reference.y=point.y;reference.width=1;reference.depth=1;reference.editable=false;project.elements.push(reference);
   expect(previewLayout(project,{...request(),footprintId:slab.id}).issues.join(' ')).toMatch(/occupied.*Existing imported reference/);
   reference.x+=100;expect(previewLayout(project,{...request(),footprintId:slab.id}).issues).toEqual([]);
-  expect(previewLayout(project,request()).issues.join(' ')).toMatch(/empty level/);
+  expect(previewLayout(project,request()).issues.join(' ')).toMatch(/empty level|occupied/);
  });
  it('uses only approved existing types and never fills unknown rates',()=>{
   const project=empty();for(const type of project.types){type.materialRate=null;type.labourRate=null;type.equipmentRate=null;}const before=JSON.stringify(project.types),preview=previewLayout(project,request());

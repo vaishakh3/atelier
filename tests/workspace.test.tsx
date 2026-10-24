@@ -2,9 +2,11 @@
 import {act,cleanup,renderHook,waitFor} from '@testing-library/react';
 import {afterEach,describe,expect,it,vi} from 'vitest';
 import {useWorkspace} from '../src/domain/useWorkspace';
-import {createDemoProject} from '../src/domain/seed';
+import {createBlankProject,createDemoProject} from '../src/domain/seed';
+import {previewLayout} from '../src/domain/layout';
+import {applyProposal} from '../src/domain/transactions';
 import {setIdentityMode} from '../src/domain/api';
-import type {Project} from '../src/domain/types';
+import type {AiProposal,LayoutRoom,Project} from '../src/domain/types';
 function json(value:unknown,status=200){return new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});}
 function fixture(initial=createDemoProject(),extras:Project[]=[]){
  let disk=structuredClone(initial),tag='revision-1';const calls:{url:string;method:string;body?:Project}[]=[];let hold:Promise<void>|null=null,listHold:Promise<void>|null=null,publicationHold:Promise<void>|null=null,commentHold:Promise<void>|null=null,deleted=false;const readHolds=new Map<string,Promise<void>>();
@@ -22,6 +24,30 @@ function fixture(initial=createDemoProject(),extras:Project[]=[]){
 }
 afterEach(()=>{cleanup();vi.unstubAllGlobals();setIdentityMode(false);});
 describe('desktop workspace persistence',()=>{
+ it('saves, undoes and redoes a concept replacement and its new storey as one complete revision',async()=>{
+  setIdentityMode(true);
+  const blank=createBlankProject('House replacement history');
+  const rooms:LayoutRoom[]=[{key:'living',name:'Living',use:'living',area:null,attachedTo:null},{key:'bedroom',name:'Bedroom',use:'bedroom',area:null,attachedTo:null},{key:'ensuite',name:'Ensuite',use:'bathroom',area:null,attachedTo:'bedroom'}];
+  const first=previewLayout(blank,{idPrefix:'before-house',levelId:'level-0',footprintId:null,width:null,depth:null,rooms});
+  expect(first.issues).toEqual([]);
+  const initial={...blank,elements:first.elements},f=fixture(initial),hook=renderHook(()=>useWorkspace({identityRequired:true,userId:'author',authenticated:true}));
+  await waitFor(()=>expect(hook.result.current.ready).toBe(true));
+  const before=structuredClone(hook.result.current.project),layout={idPrefix:'replanned-house',levelId:'level-0',footprintId:null,width:null,depth:null,storeys:2 as const,replaceConcept:true,baselineVersion:before.version,rooms:rooms.map(room=>({...room,floor:room.use==='living'?0 as const:1 as const}))};
+  const derived=previewLayout(before,layout);expect(derived.issues).toEqual([]);expect(derived.levels).toHaveLength(1);expect(derived.removedElements.length).toBe(before.elements.length);
+  const proposal:AiProposal={id:layout.idPrefix,prompt:'Improve this house with two storeys',summary:'Two-storey concept replacement',kind:'layout',changes:[],issues:[],selectedIds:[],model:'test-model',createdAt:new Date().toISOString(),layout,creations:derived.elements.map(after=>({elementId:after.id,before:null,after})),removals:derived.removedElements.map(element=>({elementId:element.id,before:element,after:null})),levelCreations:derived.levels.map(after=>({levelId:after.id,before:null,after}))};
+  const next=applyProposal(before,proposal);
+  act(()=>hook.result.current.commit(next,'Accept two-storey replacement'));
+  await act(async()=>{await hook.result.current.flush();});
+  expect(f.disk.levels).toEqual(next.levels);expect(f.disk.elements).toEqual(next.elements);expect(f.disk.version).toBe(before.version+1);
+  act(()=>hook.result.current.undoAction());
+  expect(hook.result.current.project.levels).toEqual(before.levels);expect(hook.result.current.project.elements).toEqual(before.elements);
+  await act(async()=>{await hook.result.current.flush();});
+  expect(f.disk.levels).toEqual(before.levels);expect(f.disk.elements).toEqual(before.elements);expect(f.disk.version).toBe(before.version+2);
+  act(()=>hook.result.current.redoAction());
+  await act(async()=>{await hook.result.current.flush();});
+  expect(f.disk.levels).toEqual(next.levels);expect(f.disk.elements).toEqual(next.elements);expect(f.disk.version).toBe(before.version+3);
+  expect(f.disk.constraints).toEqual(before.constraints);
+ });
  it('coalesces overlapping flushes even when the server canonicalizes the audit',async()=>{setIdentityMode(true);const f=fixture();const hook=renderHook(()=>useWorkspace({identityRequired:true,userId:'author',authenticated:true}));await waitFor(()=>expect(hook.result.current.ready).toBe(true));act(()=>hook.result.current.commit({...hook.result.current.project,name:'Reviewed house'},'Rename'));
  let release!:()=>void;f.hold(new Promise<void>(resolve=>{release=resolve;}));let a!:Promise<void>,b!:Promise<void>;act(()=>{a=hook.result.current.flush();b=hook.result.current.flush();});await waitFor(()=>expect(f.calls.filter(call=>call.method==='PUT'&&call.url.startsWith('/api/projects/'))).toHaveLength(1));release();await act(async()=>{await Promise.all([a,b]);});expect(f.disk.name).toBe('Reviewed house');expect(f.calls.filter(call=>call.method==='PUT'&&call.url.startsWith('/api/projects/'))).toHaveLength(1);expect(hook.result.current.project.audit[0].actor).toBe('authenticated-user');
  });

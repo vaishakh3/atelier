@@ -1,6 +1,9 @@
-import {useId,useMemo,useState} from 'react';
-import {ArrowUpRight,Check,Expand,Home,Layers,X} from 'lucide-react';
-import type {AiProposal,BimElement,Project} from '../domain/types';
+import {useId,useMemo,useRef,useState} from 'react';
+import type {Ref} from 'react';
+import {ArrowUpRight,Check,Expand,Home,Layers,MoveUpRight,Replace,Sun,X} from 'lucide-react';
+import type {AiProposal,BimElement,Level,Project} from '../domain/types';
+import {previewLayout} from '../domain/layout';
+import type {LayoutPreview,LayoutRoomResult} from '../domain/layout';
 import {createPlanDrawing} from '../model/drawings';
 import {formatDistance} from '../model/geometry';
 import {Modal,Notice,Pill,num} from './ui';
@@ -8,49 +11,92 @@ import './LayoutProposalPreview.css';
 
 type Props={source:Project;preview:Project;proposal:AiProposal;disabled:boolean;onAccept:()=>void;onReject:()=>void};
 const displayUse=(value:unknown)=>typeof value==='string'?value.replace(/(^|[-_ ])\w/g,letter=>letter.replace(/[-_]/,' ').toUpperCase()):'Room';
-function PlanPreview({project,levelId,compact=false}:{project:Project;levelId:string;compact?:boolean}){
- const patternId=useId().replace(/:/g,''),drawing=useMemo(()=>createPlanDrawing(project,levelId,true),[project,levelId]);
+const area=(value:number,units:Project['units'])=>`${num(value*(units==='ft'?10.7639104167:1),1)} ${units==='ft'?'ft²':'m²'}`;
+const dimensions=(element:BimElement,units:Project['units'])=>[element.width,element.depth,element.height].map(value=>num(value*(units==='ft'?3.280839895:1),2)).join(' × ');
+const elevation=(level:Level,units:Project['units'])=>`${level.elevation>=0?'+':''}${formatDistance(level.elevation,units)}`;
+
+function FloorTabs({levels,selected,onSelect,units,panelId,idPrefix}:{levels:Level[];selected:string;onSelect:(id:string)=>void;units:Project['units'];panelId:string;idPrefix:string}){
+ return <div className="layout-floor-tabs" role="tablist" aria-label="Proposed layout floors">{levels.map((level,index)=><button key={level.id} id={`${idPrefix}-${level.id}`} role="tab" type="button" aria-selected={selected===level.id} aria-controls={panelId} tabIndex={selected===level.id?0:-1} onClick={()=>onSelect(level.id)} onKeyDown={event=>{
+  const next=event.key==='ArrowRight'?(index+1)%levels.length:event.key==='ArrowLeft'?(index-1+levels.length)%levels.length:event.key==='Home'?0:event.key==='End'?levels.length-1:-1;
+  if(next<0)return;event.preventDefault();event.stopPropagation();onSelect(levels[next].id);const tabs=event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');tabs?.[next]?.focus();
+ }}><strong>{level.name}</strong><small>{elevation(level,units)}</small></button>)}</div>;
+}
+function PlanPreview({project,level,compact=false,panelId,tabId}:{project:Project;level:Level;compact?:boolean;panelId:string;tabId:string}){
+ const patternId=useId().replace(/:/g,''),drawing=useMemo(()=>createPlanDrawing(project,level.id,true),[project,level.id]);
  const {minX,minY,maxX,maxY}=drawing.bounds,width=Math.max(1,maxX-minX),height=Math.max(1,maxY-minY),padding=Math.max(width,height)*.055;
- return <div className={`layout-plan-preview ${compact?'compact':''}`}><svg viewBox={`${minX-padding} ${minY-padding} ${width+padding*2} ${height+padding*2}`} role="img" aria-label="Proposed house floor plan with room names, areas and footprint dimensions" preserveAspectRatio="xMidYMid meet">
-  <title>Proposed house layout</title><desc>Unsaved model-derived plan. Review the room and element dimensions before accepting.</desc>
+ return <div id={panelId} role="tabpanel" aria-labelledby={tabId} tabIndex={0} className={`layout-plan-preview ${compact?'compact':''}`}><svg style={compact?undefined:{aspectRatio:`${width+padding*2} / ${height+padding*2}`}} viewBox={`${minX-padding} ${minY-padding} ${width+padding*2} ${height+padding*2}`} role="img" aria-label={`Proposed house floor plan with room names, areas and footprint dimensions · ${level.name}`} preserveAspectRatio="xMidYMid meet">
+  <title>{level.name} · proposed house layout</title><desc>Unsaved model-derived plan. Review the room and element dimensions before accepting.</desc>
   <defs><pattern id={patternId} width=".5" height=".5" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r=".012" fill="#dedce6"/></pattern></defs>
   <rect x={minX-padding} y={minY-padding} width={width+padding*2} height={height+padding*2} fill={`url(#${patternId})`}/>
   {drawing.primitives.map((primitive,index)=>primitive.kind==='text'?<text key={index} x={primitive.points[0]?.x} y={primitive.points[0]?.y} textAnchor={primitive.anchor??'middle'} fontSize={primitive.fontSize??.2} fill={primitive.stroke}>{primitive.text}</text>:primitive.kind==='polygon'?<polygon key={index} points={primitive.points.map(point=>`${point.x},${point.y}`).join(' ')} stroke={primitive.stroke} fill={primitive.fill??'none'} strokeWidth={primitive.width??.02} strokeDasharray={primitive.dashed?'.08 .06':undefined}/>:<polyline key={index} points={primitive.points.map(point=>`${point.x},${point.y}`).join(' ')} stroke={primitive.stroke} fill="none" strokeWidth={primitive.width??.02} strokeDasharray={primitive.dashed?'.08 .06':undefined}/>)}
  </svg><span className="layout-preview-watermark">PROPOSAL · UNSAVED</span></div>;
 }
-function area(value:number,units:Project['units']){return`${num(value*(units==='ft'?10.7639104167:1),1)} ${units==='ft'?'ft²':'m²'}`;}
-function RoomSchedule({rooms,units,compact=false}:{rooms:BimElement[];units:Project['units'];compact?:boolean}){
- const names=new Map(rooms.map(room=>[String(room.properties.layoutKey||''),room.name]));
- return <div className={`layout-review-table ${compact?'compact':''}`}><table><caption>Proposed room dimensions</caption><thead><tr><th>Room</th><th>Clear size · {units}</th><th>Area</th>{!compact&&<><th>Target</th><th>Access</th></>}</tr></thead><tbody>{rooms.map(room=>{
-  const requested=room.properties.requestedArea,attached=room.properties.attachedTo;
-  return <tr key={room.id}><td><strong>{room.name}</strong>{!compact&&<small>{displayUse(room.properties.use)}</small>}</td><td>{num(room.width*(units==='ft'?3.280839895:1),2)} × {num(room.depth*(units==='ft'?3.280839895:1),2)}</td><td>{area(room.width*room.depth,units)}</td>{!compact&&<><td>{typeof requested==='number'&&requested>0?area(requested,units):'Auto-sized'}</td><td>{typeof attached==='string'&&attached?`Via ${names.get(attached)||attached}`:room.properties.use==='circulation'?'Entrance':'Circulation'}</td></>}</tr>;
+function RoomSchedule({rooms,allRooms,metadata,units,compact=false}:{rooms:BimElement[];allRooms:BimElement[];metadata:LayoutRoomResult[];units:Project['units'];compact?:boolean}){
+ const names=new Map(allRooms.flatMap(room=>[[room.id,room.name],[String(room.properties.layoutKey||''),room.name]])),floorNames=new Map(allRooms.map(room=>[`${room.levelId}|${String(room.properties.layoutKey||'')}`,room.name])),byId=new Map(metadata.map(room=>[room.elementId,room]));
+ const accessName=(value:string,levelId:string)=>value==='outside'?'Outside':floorNames.get(`${levelId}|${value}`)||names.get(value)||value.replace(/[-_]/g,' ');
+ return <div className={`layout-review-table ${compact?'compact':''}`} role="region" aria-label="Room schedule scroll area" tabIndex={0}><table><caption>Proposed room dimensions</caption><thead><tr><th>Room</th><th>Clear size · {units}</th><th>Area</th>{!compact&&<><th>Min. target</th><th>Access</th><th>Window proxy</th></>}</tr></thead><tbody>{rooms.map(room=>{
+  const info=byId.get(room.id),requested=info?.requestedArea??room.properties.requestedArea,access=info?.accessFrom??(typeof room.properties.accessFrom==='string'?room.properties.accessFrom:typeof room.properties.attachedTo==='string'?room.properties.attachedTo:null);
+  const windowLabel=info?info.daylight==='exterior-window'?'Exterior window':'No exterior window':'Not assessed';
+  return <tr key={room.id}><td><strong>{room.name}</strong><small>{room.properties.reservedZone?'Reserved zone':compact?windowLabel:displayUse(room.properties.use)}</small></td><td>{num(room.width*(units==='ft'?3.280839895:1),2)} × {num(room.depth*(units==='ft'?3.280839895:1),2)}</td><td>{area(room.width*room.depth,units)}</td>{!compact&&<><td>{typeof requested==='number'&&requested>0?area(requested,units):'—'}</td><td>{access?`${access==='outside'?'':'Via '}${accessName(access,room.levelId)}`:'Not specified'}</td><td>{windowLabel}{info?.windowIds?.length?<small>{info.windowIds.length} opening{info.windowIds.length===1?'':'s'}</small>:null}</td></>}</tr>;
  })}</tbody></table></div>;
 }
+function PlanningSummary({result,units,compact=false}:{result:LayoutPreview|null;units:Project['units'];compact?:boolean}){
+ const strategy:string=result?.strategy??'',metrics=result?.metrics;
+ if(!metrics||(strategy!=='compact-hub'&&strategy!=='zoned-gallery'))return null;
+ const hubArea='hubArea'in metrics&&typeof metrics.hubArea==='number'&&Number.isFinite(metrics.hubArea)?metrics.hubArea:null;
+ const longestBranch='longestAccessBranch'in metrics&&typeof metrics.longestAccessBranch==='number'&&Number.isFinite(metrics.longestAccessBranch)?metrics.longestAccessBranch:null;
+ return <section className={`layout-planning-summary ${compact?'compact':''} ${strategy==='zoned-gallery'?'gallery':''}`} aria-label="Whole-house planning metrics"><div className="layout-planning-heading"><strong>{strategy==='compact-hub'?'Compact hub':'Zoned gallery'}</strong><span>Whole house · all floors</span></div><p>{strategy==='compact-hub'?'Rooms connect around a shared foyer or social space.':'Uses gallery circulation. Review the measured access branch before applying.'}</p><dl><div><dt>Shared hub area</dt><dd>{hubArea===null?'Not measured':area(hubArea,units)}</dd></div><div><dt>Longest access branch</dt><dd>{longestBranch===null?'Not measured':formatDistance(longestBranch,units)}</dd></div>{!compact&&<><div><dt>Dedicated circulation area / share</dt><dd>{area(metrics.circulationArea,units)} · {num(metrics.circulationRatio*100,1)}%</dd></div><div><dt>Exterior-window proxy</dt><dd>{metrics.habitableRooms>0?`${metrics.daylightRooms} / ${metrics.habitableRooms} habitable rooms`:'Not assessed'}</dd></div></>}</dl><small>{compact?'Branch length excludes the shared hub.':'Measured across all floors. Branch length is the longest side of one access space outside the hub, not walking distance. Dedicated circulation counts automatic foyer, landing and branch spaces; it excludes paths within requested living/dining rooms. Exterior openings are a window-coverage proxy, not daylight analysis.'}</small></section>;
+}
+function Replacements({proposal,levels,units,expanded=false,reviewRef,sectionId}:{proposal:AiProposal;levels:Level[];units:Project['units'];expanded?:boolean;reviewRef?:Ref<HTMLElement>;sectionId?:string}){
+ const removals=proposal.removals??[];if(!removals.length)return null;
+ return <section ref={reviewRef} id={sectionId} tabIndex={expanded?-1:undefined} className={`layout-replacements ${expanded?'expanded':''}`} aria-label="Existing elements to replace"><div className="layout-replacement-heading"><Replace size={15}/><strong>Replaces {removals.length} existing concept elements</strong></div><p>Accepting removes every object listed below. The reviewed replacement and new levels form one undoable transaction.</p><ul tabIndex={0} aria-label="Replacement element list">{removals.map(removal=><li key={removal.elementId}><strong>{removal.before.name}</strong><small>{removal.elementId} · {removal.before.kind} · {levels.find(level=>level.id===removal.before.levelId)?.name||removal.before.levelId}</small>{expanded&&<><span>{dimensions(removal.before,units)} {units} · position {[removal.before.x,removal.before.y,removal.before.z].map(value=>num(value*(units==='ft'?3.280839895:1),2)).join(', ')} {units} · {num(removal.before.rotation)}°</span><details><summary>Exact before object · {removal.elementId}</summary><pre>{JSON.stringify(removal.before,null,2)}</pre></details></>}</li>)}</ul>{!expanded&&<small className="layout-replacement-details-note">Review each exact before object in the expanded review.</small>}</section>;
+}
+function Stairs({stairs,levels,units}:{stairs:BimElement[];levels:Level[];units:Project['units']}){
+ if(!stairs.length)return null;
+ return <div className="layout-stair-links" aria-label="Proposed stair connections">{stairs.map(stair=>{
+  const from=levels.find(level=>level.id===stair.levelId),target=typeof stair.properties.toLevelId==='string'?levels.find(level=>level.id===stair.properties.toLevelId):levels.find(level=>level.elevation>(from?.elevation??stair.z)&&Math.abs(level.elevation-(stair.z+stair.height))<.3);
+  return <div key={stair.id}><MoveUpRight size={15}/><div><strong>{from?.name||stair.levelId} → {target?.name||'Upper landing'}</strong><span>{stair.name} · rise {formatDistance(stair.height,units)} · {formatDistance(stair.width,units)} × {formatDistance(stair.depth,units)}</span></div></div>;
+ })}<p>Concept stair geometry; stair safety, headroom and code compliance require review.</p></div>;
+}
 export default function LayoutProposalPreview({source,preview,proposal,disabled,onAccept,onReject}:Props){
- const [expanded,setExpanded]=useState(false),layout=proposal.layout;
- const created=proposal.creations?.map(creation=>creation.after)??[],createdIds=new Set(created.map(element=>element.id)),rooms=created.filter(element=>element.kind==='room');
- const footprint=source.elements.find(element=>element.id===layout?.footprintId)??created.find(element=>element.kind==='slab');
- const scope=useMemo(()=>({...preview,elements:preview.elements.filter(element=>createdIds.has(element.id)||element.id===layout?.footprintId)}),[preview,proposal]);
- if(!layout)return null;
- const levelName=preview.levels.find(level=>level.id===layout.levelId)?.name||'Building level';
- const counts=['wall','door','window'].map(kind=>`${created.filter(element=>element.kind===kind).length} ${kind}s`);
- const basis=footprint?`${formatDistance(footprint.width,source.units)} × ${formatDistance(footprint.depth,source.units)}`:'Auto-sized footprint';
+ const [expanded,setExpanded]=useState(false),[selectedFloor,setSelectedFloor]=useState(proposal.layout?.levelId??''),id=useId().replace(/:/g,''),replacementDetails=useRef<HTMLElement>(null),layout=proposal.layout;
+ const derived=useMemo(()=>layout?previewLayout(source,layout):null,[source,layout]);
+ const created=useMemo(()=>proposal.creations?.map(creation=>creation.after)??[],[proposal.creations]),rooms=useMemo(()=>created.filter(element=>element.kind==='room'),[created]);
+ const scope=useMemo(()=>{const ids=new Set(created.map(element=>element.id));return{...preview,elements:preview.elements.filter(element=>ids.has(element.id)||element.id===layout?.footprintId)};},[preview,created,layout?.footprintId]);
+ const levels=useMemo(()=>{const ids=new Set(created.map(element=>element.levelId));if(layout)ids.add(layout.levelId);return preview.levels.filter(level=>ids.has(level.id)).sort((a,b)=>a.elevation-b.elevation);},[preview.levels,created,layout]);
+ if(!layout||!levels.length)return null;
+ const level=levels.find(candidate=>candidate.id===selectedFloor)??levels[0],floorRooms=rooms.filter(room=>room.levelId===level.id),newLevels=proposal.levelCreations??[],removed=proposal.removals??[],stairs=created.filter(element=>element.kind==='stair');
+ const floorFootprint=derived?.floors?.find(floor=>floor.level.id===level.id)?.footprint,slab=scope.elements.find(element=>element.kind==='slab'&&element.levelId===level.id);
+ const basis=floorFootprint?`${formatDistance(floorFootprint.width,source.units)} × ${formatDistance(floorFootprint.depth,source.units)}`:slab?`${formatDistance(slab.width,source.units)} × ${formatDistance(slab.depth,source.units)}`:'Proposed footprint';
+ const floorElements=created.filter(element=>element.levelId===level.id),counts=['wall','door','window'].map(kind=>{const count=floorElements.filter(element=>element.kind===kind).length;return`${count} ${kind}${count===1?'':'s'}`;}),metadata=derived?.rooms??[];
+ const miniPanel=`${id}-mini-plan`,fullPanel=`${id}-full-plan`,miniTabs=`${id}-mini-floor`,fullTabs=`${id}-full-floor`,replacementDetailsId=`${id}-replacement-details`;
  const accept=()=>{if(disabled)return;setExpanded(false);onAccept();},reject=()=>{setExpanded(false);onReject();};
  return <div className="layout-proposal-preview">
   <div className="layout-preview-heading"><Home size={14}/><strong>House layout preview</strong><Pill>Not applied</Pill></div>
-  <PlanPreview project={scope} levelId={layout.levelId} compact/>
-  <div className="layout-preview-basis"><strong>{basis}</strong><span>{levelName} · {footprint&&layout.footprintId?'Selected slab':'New footprint'}</span><small>{rooms.length} spaces · {counts.join(' · ')}</small></div>
-  <RoomSchedule rooms={rooms} units={source.units} compact/>
+  <div className="layout-change-counts"><span>{created.length} new elements</span><span>{removed.length} replaced</span><span>{newLevels.length} new level{newLevels.length===1?'':'s'}</span></div>
+  <Replacements proposal={proposal} levels={source.levels} units={source.units}/>
+  <FloorTabs levels={levels} selected={level.id} onSelect={setSelectedFloor} units={source.units} panelId={miniPanel} idPrefix={miniTabs}/>
+  <PlanPreview project={scope} level={level} compact panelId={miniPanel} tabId={`${miniTabs}-${level.id}`}/>
+  <div className="layout-preview-basis"><strong>{basis}</strong><span>{level.name} · {elevation(level,source.units)}{level.id===layout.levelId&&layout.footprintId?' · Selected slab':''}</span><small>{floorRooms.length} spaces on this floor · {counts.join(' · ')}</small></div>
+  <PlanningSummary result={derived} units={source.units} compact/>
+  <RoomSchedule rooms={floorRooms} allRooms={rooms} metadata={metadata} units={source.units} compact/>
+  {newLevels.length>0&&<div className="layout-new-levels" aria-label="New levels to create">{newLevels.map(creation=><span key={creation.levelId}><Layers size={11}/><strong>{creation.after.name}</strong>{elevation(creation.after,source.units)} · new</span>)}</div>}
+  <Stairs stairs={stairs} levels={preview.levels} units={source.units}/>
   <button className="button small full" onClick={()=>setExpanded(true)}><Expand size={13}/>Review plan & all {created.length} elements<ArrowUpRight size={13}/></button>
-  <p className="layout-preview-caption">Concept geometry only. Review the footprint, access and room sizes before adding it to your model.</p>
+  <p className="layout-preview-caption"><Sun size={12}/>Exterior windows are an opening-coverage proxy, not a daylight or ventilation analysis.</p>
   {expanded&&<Modal title="Review proposed house layout" wide onClose={()=>setExpanded(false)}><div className="modal-body layout-review-body">
-   <div className="layout-review-summary"><Pill><Layers size={11}/>{levelName}</Pill><Pill>{basis}</Pill><Pill>{created.length} new elements</Pill><Pill tone="amber">Unsaved preview</Pill></div>
-   <Notice>Accepting adds this layout in one undoable transaction. Closing or rejecting this preview leaves the project unchanged.</Notice>
-   <PlanPreview project={scope} levelId={layout.levelId}/>
-   <h3>Room sizes & access</h3><RoomSchedule rooms={rooms} units={source.units}/>
-   <h3>Elements to be created</h3><div className="layout-review-table elements"><table><caption>Complete proposed creation list</caption><thead><tr><th>Element</th><th>Type</th><th>Dimensions · {source.units}</th><th>Host</th></tr></thead><tbody>{created.map(element=><tr key={element.id}><td><strong>{element.name}</strong><small>{element.id}</small></td><td>{element.kind}</td><td>{[element.width,element.depth,element.height].map(value=>num(value*(source.units==='ft'?3.280839895:1),2)).join(' × ')}</td><td>{element.hostId?created.find(host=>host.id===element.hostId)?.name||element.hostId:'—'}</td></tr>)}</tbody></table></div>
+   <div className="layout-review-summary"><Pill>{levels.length} floor plan{levels.length===1?'':'s'}</Pill><Pill>{created.length} new elements</Pill><Pill tone={removed.length?'amber':'neutral'}>{removed.length} replaced</Pill><Pill>{newLevels.length} new level{newLevels.length===1?'':'s'}</Pill><Pill tone="amber">Unsaved preview</Pill></div>
+   {removed.length>0?<div className="layout-replacement-callout" role="note" aria-label="Replacement review warning"><div><Replace size={15}/><strong>Replaces {removed.length} existing concept elements</strong></div><p>Accepting removes the listed objects and applies this layout in one undoable transaction. Closing or rejecting leaves the project unchanged.</p><button className="text-button" aria-controls={replacementDetailsId} onClick={()=>{replacementDetails.current?.scrollIntoView?.({block:'start'});replacementDetails.current?.focus({preventScroll:true});}}>Review exact replacement objects<ArrowUpRight size={12}/></button></div>:<Notice>Accepting applies the listed creations and new levels in one undoable transaction. Closing or rejecting this preview leaves the project unchanged.</Notice>}
+   <FloorTabs levels={levels} selected={level.id} onSelect={setSelectedFloor} units={source.units} panelId={fullPanel} idPrefix={fullTabs}/>
+   <PlanPreview project={scope} level={level} panelId={fullPanel} tabId={`${fullTabs}-${level.id}`}/>
+   <PlanningSummary result={derived} units={source.units}/>
+   <div className="layout-floor-heading"><h3>{level.name} · room sizes & access</h3><Pill>{basis}</Pill></div><RoomSchedule rooms={floorRooms} allRooms={rooms} metadata={metadata} units={source.units}/>
+   <p className="layout-preview-caption"><Sun size={12}/>Exterior-window coverage is a geometric proxy only. This is not daylight, ventilation, structural or code-compliance analysis.</p>
+   <h3>Levels & stair connection</h3><div className="layout-level-list">{levels.map(item=><div key={item.id}><strong>{item.name}</strong><span>{elevation(item,source.units)}</span><Pill tone={newLevels.some(creation=>creation.levelId===item.id)?'green':'neutral'}>{newLevels.some(creation=>creation.levelId===item.id)?'New level':'Existing level'}</Pill></div>)}</div><Stairs stairs={stairs} levels={preview.levels} units={source.units}/>
+   {removed.length>0&&<Replacements proposal={proposal} levels={source.levels} units={source.units} expanded reviewRef={replacementDetails} sectionId={replacementDetailsId}/>}
+   <h3>All elements to be created</h3><div className="layout-review-table elements" role="region" aria-label="Created elements scroll area" tabIndex={0}><table><caption>Complete proposed creation list</caption><thead><tr><th>Element</th><th>Type</th><th>Floor</th><th>Dimensions · {source.units}</th><th>Position · {source.units}</th><th>Host</th></tr></thead><tbody>{created.map(element=><tr key={element.id}><td><strong>{element.name}</strong><small>{element.id}</small></td><td>{element.kind}</td><td>{preview.levels.find(item=>item.id===element.levelId)?.name||element.levelId}</td><td>{dimensions(element,source.units)}</td><td>{[element.x,element.y,element.z].map(value=>num(value*(source.units==='ft'?3.280839895:1),2)).join(', ')}<small>{num(element.rotation)}° rotation</small></td><td>{element.hostId?preview.elements.find(host=>host.id===element.hostId)?.name||element.hostId:'—'}</td></tr>)}</tbody></table></div>
    {proposal.issues.length>0&&<><h3>Assumptions to review</h3>{proposal.issues.map((issue,index)=><Notice key={index} warning>{issue}</Notice>)}</>}
-   <p className="layout-preview-caption">Plan, room areas and dimensions are derived from the proposed BIM elements. Existing project elements remain unchanged.</p>
-  </div><footer><button className="button" onClick={reject}><X size={13}/>Reject layout</button><button className="button primary" disabled={disabled} onClick={accept}><Check size={13}/>Accept layout</button></footer></Modal>}
+   <p className="layout-preview-caption">Plan, room areas and dimensions are derived from the proposed BIM elements. {removed.length?'Only the listed existing objects are replaced; other model elements are retained.':'Existing project elements remain unchanged.'}</p>
+  </div><footer className="layout-review-actions"><button className="button" onClick={reject}><X size={13}/>Reject layout</button><button className="button primary" disabled={disabled} onClick={accept}><Check size={13}/>Accept layout</button></footer></Modal>}
  </div>;
 }
