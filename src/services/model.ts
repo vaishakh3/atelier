@@ -261,7 +261,7 @@ export function acceptServiceProposal(project: Project, baselineSnapshot: Projec
     }
   }
   const changedIds = new Set(candidate.services.points.filter(point => !same(point, project.services?.points.find(previous => previous.id === point.id))).map(point => point.roomId).filter((id): id is string => !!id));
-  for (const oldPoint of project.services?.points ?? []) if (!candidate.services.points.some(point => point.id === oldPoint.id) && oldPoint.roomId) changedIds.add(oldPoint.roomId);
+  for (const oldPoint of project.services?.points ?? []) if (!same(oldPoint, candidate.services.points.find(point => point.id === oldPoint.id)) && oldPoint.roomId) changedIds.add(oldPoint.roomId);
   if (!same(project.services?.routes, candidate.services.routes)) for (const point of candidate.services.points) if (point.roomId) changedIds.add(point.roomId);
   for (const id of changedIds) {
     const room = project.elements.find(element => element.id === id);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
-import { Compass, Minus, Plus, Scan } from 'lucide-react';
+import { Compass, Focus, Minus, Plus, Scan } from 'lucide-react';
 import type { BimElement, Project, ViewMode } from '../domain/types';
 import { createDrawnElement, formatDistance, modelBounds, snap } from '../model/geometry';
 import type { Point2 } from '../model/geometry';
@@ -10,7 +10,35 @@ import type { DrawingPrimitive } from '../model/drawings';
 export interface ModelViewportProps {
   project:Project; selectedIds:string[]; onSelect:(ids:string[])=>void; viewMode:ViewMode;
   activeLevelId:string; tool:string; onCreate:(element:BimElement)=>void;
-  onUpdate:(id:string,patch:Partial<BimElement>)=>void; showGrid:boolean; ghostUpper:boolean; fitKey:number;
+  onUpdate:(id:string,patch:Partial<BimElement>)=>void; showGrid:boolean; ghostUpper:boolean; fitKey:number; fitSelectionKey?:number; onCancelInteraction?:()=>void; hiddenIds?:string[]; isolatedIds?:string[];
+}
+/** Transient visibility only. Hosts retain geometric context; canonical project data is untouched. */
+export function visibleViewportElements(project:Project,hiddenIds:string[]=[],isolatedIds:string[]=[]):BimElement[]{
+ const hidden=new Set(hiddenIds),isolated=new Set(isolatedIds),byId=new Map(project.elements.map(element=>[element.id,element]));
+ const hiddenByHost=(element:BimElement,seen=new Set<string>()):boolean=>{if(hidden.has(element.id))return true;if(!element.hostId||seen.has(element.id))return false;const host=byId.get(element.hostId);return !!host&&hiddenByHost(host,new Set([...seen,element.id]));};
+ const context=new Set(isolated);
+ for(const id of isolated){const element=byId.get(id);if(element?.hostId)context.add(element.hostId);if(element?.kind==='wall')for(const child of project.elements)if(child.hostId===id)context.add(child.id);}
+ return project.elements.filter(element=>!hiddenByHost(element)&&(!isolated.size||context.has(element.id)));
+}
+type ViewBounds={minX:number;minY:number;maxX:number;maxY:number};
+const clampZoom=(value:number)=>Math.min(80,Math.max(.05,value));
+export const viewportTextEntry=(target:EventTarget|null)=>target instanceof Element&&!!target.closest('input,textarea,select,[contenteditable="true"],[role="dialog"]');
+/** Camera state only: focusing or navigating never edits the model. */
+function useViewportFrame(bounds:ViewBounds,selection:ViewBounds|null,fitKey:number,fitSelectionKey:number|undefined,identity:string){
+ const [zoom,setZoom]=useState(1),[pan,setPan]=useState<Point2>({x:0,y:0});
+ const selectionRequest=useRef<number|undefined>(undefined);
+ const baseWidth=Math.max(8,bounds.maxX-bounds.minX+4),baseHeight=Math.max(7,bounds.maxY-bounds.minY+4);
+ const centre={x:(bounds.minX+bounds.maxX)/2,y:(bounds.minY+bounds.maxY)/2};
+ const fitAll=()=>{setZoom(1);setPan({x:0,y:0});};
+ const fitSelection=()=>{if(!selection)return;const padding=Math.max(.3,Math.max(selection.maxX-selection.minX,selection.maxY-selection.minY)*.15);setZoom(clampZoom(Math.min(baseWidth/Math.max(.5,selection.maxX-selection.minX+padding*2),baseHeight/Math.max(.5,selection.maxY-selection.minY+padding*2))));setPan({x:(selection.minX+selection.maxX)/2-centre.x,y:(selection.minY+selection.maxY)/2-centre.y});};
+ useEffect(fitAll,[fitKey,identity]);
+ useEffect(()=>{if(selectionRequest.current!==fitSelectionKey){selectionRequest.current=fitSelectionKey;if((fitSelectionKey??0)>0)fitSelection();}},[fitSelectionKey]);
+ const width=baseWidth/zoom,height=baseHeight/zoom,x=centre.x-width/2+pan.x,y=centre.y-height/2+pan.y;
+ const zoomBy=(factor:number,anchor?:Point2)=>{const next=clampZoom(zoom*factor);if(anchor){const ratio=zoom/next;setPan({x:anchor.x-(anchor.x-centre.x-pan.x)*ratio-centre.x,y:anchor.y-(anchor.y-centre.y-pan.y)*ratio-centre.y});}setZoom(next);};
+ return{zoom,pan,setPan,zoomBy,fitAll,fitSelection,width,height,x,y};
+}
+function ViewNavigation({zoomBy,fitAll,fitSelection,hasSelection}:{zoomBy:(factor:number)=>void;fitAll:()=>void;fitSelection:()=>void;hasSelection:boolean}){
+ return <div className="viewport-nav" role="group" aria-label="View navigation"><button title="Zoom in" aria-label="Zoom in" onClick={()=>zoomBy(1.2)}><Plus size={16}/></button><button title="Zoom out" aria-label="Zoom out" onClick={()=>zoomBy(1/1.2)}><Minus size={16}/></button><button title="Fit all" aria-label="Fit all" onClick={fitAll}><Scan size={16}/></button><button title="Fit selection · F" aria-label="Fit selection" disabled={!hasSelection} onClick={fitSelection}><Focus size={16}/></button></div>;
 }
 type Drawing={start:Point2;end:Point2};
 type Dragging={id:string;start:Point2;original:BimElement;delta:Point2};
@@ -32,45 +60,52 @@ function PlanElement({element:e,selected,onPointerDown,onActivate,units}:{elemen
   </g>;
 }
 
-function Projection({project,viewMode,selectedIds,onSelect,showGrid}:{project:Project;viewMode:ViewMode;selectedIds:string[];onSelect:(ids:string[])=>void;showGrid:boolean}) {
+function Projection({project,viewMode,selectedIds,onSelect,showGrid,fitKey,fitSelectionKey,visibilityKey}:{project:Project;viewMode:ViewMode;selectedIds:string[];onSelect:(ids:string[])=>void;showGrid:boolean;fitKey:number;fitSelectionKey?:number;visibilityKey?:string}) {
   const drawing=createProjectionDrawing(project,viewMode==='section'?'section':'elevation',showGrid);
-  const bounds=drawing.bounds,width=Math.max(1,bounds.maxX-bounds.minX),height=Math.max(1,bounds.maxY-bounds.minY),padding=Math.max(width,height)*.12;
+  const bounds=drawing.bounds,padding=Math.max(1,bounds.maxX-bounds.minX,bounds.maxY-bounds.minY)*.12;
+  const selectedPrimitives=drawing.primitives.filter(primitive=>primitive.elementId&&selectedIds.includes(primitive.elementId));
+  const frame=useViewportFrame(bounds,selectedPrimitives.length?drawingBounds(selectedPrimitives):null,fitKey,fitSelectionKey,`${project.id}:${viewMode}:${visibilityKey??''}`);
+  const panStart=useRef<{x:number;y:number;pan:Point2}|null>(null);
+  const svgRef=useRef<SVGSVGElement>(null);
+  useEffect(()=>{const svg=svgRef.current,prevent=(event:WheelEvent)=>event.preventDefault(),cancel=(event:KeyboardEvent)=>{if(event.key==='Escape'&&!viewportTextEntry(event.target))panStart.current=null;};svg?.addEventListener('wheel',prevent,{passive:false});window.addEventListener('keydown',cancel);return()=>{svg?.removeEventListener('wheel',prevent);window.removeEventListener('keydown',cancel);};},[]);
   const groups:{elementId?:string;primitives:DrawingPrimitive[]}[]=[];
   for(const primitive of drawing.primitives){const last=groups[groups.length-1];if(last&&last.elementId===primitive.elementId)last.primitives.push(primitive);else groups.push({elementId:primitive.elementId,primitives:[primitive]});}
   function activate(id:string,additive=false){onSelect(additive?(selectedIds.includes(id)?selectedIds.filter(existing=>existing!==id):[...selectedIds,id]):[id]);}
-  return <svg viewBox={`${bounds.minX-padding} ${bounds.minY-padding} ${width+padding*2} ${height+padding*2}`} aria-label={drawing.title} className="projection-svg" onClick={()=>onSelect([])}>
+  return <><svg ref={svgRef} viewBox={`${frame.x} ${frame.y} ${frame.width} ${frame.height}`} aria-label={drawing.title} className="projection-svg" onClick={event=>{if(event.button===0)onSelect([]);}} onContextMenu={event=>event.preventDefault()} onWheel={event=>frame.zoomBy(event.deltaY>0?.9:1.1)} onPointerDown={event=>{if(event.button===1||event.button===2){panStart.current={x:event.clientX,y:event.clientY,pan:frame.pan};event.currentTarget.setPointerCapture?.(event.pointerId);event.preventDefault();}}} onPointerMove={event=>{const start=panStart.current,rect=event.currentTarget.getBoundingClientRect();if(start&&rect.width&&rect.height)frame.setPan({x:start.pan.x-(event.clientX-start.x)*frame.width/rect.width,y:start.pan.y-(event.clientY-start.y)*frame.height/rect.height});}} onPointerUp={()=>{panStart.current=null;}} onPointerCancel={()=>{panStart.current=null;}} style={{touchAction:'none'}}>
     <desc>{drawing.subtitle}</desc>
     {drawing.empty?<text x={(bounds.minX+bounds.maxX)/2} y={(bounds.minY+bounds.maxY)/2} textAnchor="middle" fontSize=".4" fill="#9995a5">No model geometry to project</text>:groups.map((group,i)=>{
       const selected=!!group.elementId&&selectedIds.includes(group.elementId),element=group.elementId?project.elements.find(e=>e.id===group.elementId):undefined;
-      return <g key={`${group.elementId??'annotation'}-${i}`} role={group.elementId?'button':undefined} tabIndex={group.elementId?0:undefined} aria-label={element?.name} aria-pressed={group.elementId?selected:undefined} onKeyDown={event=>{if(group.elementId&&(event.key==='Enter'||event.key===' ')){event.preventDefault();activate(group.elementId,event.ctrlKey||event.metaKey||event.shiftKey);}}} onClick={event=>{if(group.elementId){event.stopPropagation();activate(group.elementId,event.ctrlKey||event.metaKey||event.shiftKey);}}} style={{cursor:group.elementId?'pointer':'default'}}>
+      return <g key={`${group.elementId??'annotation'}-${i}`} role={group.elementId?'button':undefined} tabIndex={group.elementId?0:undefined} aria-label={element?.name} aria-pressed={group.elementId?selected:undefined} onKeyDown={event=>{if(group.elementId&&(event.key==='Enter'||event.key===' ')){event.preventDefault();activate(group.elementId,event.ctrlKey||event.metaKey||event.shiftKey);}}} onClick={event=>{if(group.elementId&&event.button===0){event.stopPropagation();activate(group.elementId,event.ctrlKey||event.metaKey||event.shiftKey);}}} style={{cursor:group.elementId?'pointer':'default'}}>
         {element&&<title>{element.name}</title>}
         {group.primitives.map((primitive,j)=>primitive.kind==='text'?<text key={j} x={primitive.points[0]?.x} y={primitive.points[0]?.y} fill={primitive.stroke} fontSize={primitive.fontSize??.2} textAnchor={primitive.anchor??'middle'} style={{pointerEvents:'none'}}>{primitive.text}</text>:primitive.kind==='polygon'?<polygon key={j} points={primitive.points.map(p=>`${p.x},${p.y}`).join(' ')} fill={selected&&primitive.fill!=='none'?'#e2dafa':primitive.fill??'none'} stroke={selected?selectedColor:primitive.stroke} strokeWidth={selected?.045:primitive.width??.02} strokeDasharray={primitive.dashed?'.1 .07':undefined}/>:<polyline key={j} points={primitive.points.map(p=>`${p.x},${p.y}`).join(' ')} fill="none" stroke={selected?selectedColor:primitive.stroke} strokeWidth={selected?.035:primitive.width??.02} strokeDasharray={primitive.dashed?'.1 .07':undefined} style={{pointerEvents:group.elementId?'stroke':'none'}}/>)}
       </g>;
     })}
     {!drawing.empty&&<text x={bounds.minX} y={bounds.maxY+padding*.65} fontSize=".15" fill="#9b96a5" style={{pointerEvents:'none'}}>{drawing.subtitle}</text>}
-  </svg>;
+  </svg><ViewNavigation zoomBy={frame.zoomBy} fitAll={frame.fitAll} fitSelection={frame.fitSelection} hasSelection={selectedPrimitives.length>0}/><div className="viewport-orbit-hint">Middle or right drag to pan · Scroll to zoom</div></>;
 }
 
 export default function PlanEditor(props:ModelViewportProps) {
   const {project,selectedIds,onSelect,activeLevelId,tool,onCreate,onUpdate,showGrid,fitKey,viewMode}=props;
   const svgRef=useRef<SVGSVGElement>(null);
   const [drawing,setDrawing]=useState<Drawing|null>(null),[dragging,setDragging]=useState<Dragging|null>(null),[notice,setNotice]=useState('');
-  const [zoom,setZoom]=useState(1),[pan,setPan]=useState<Point2>({x:0,y:0});
   const panStart=useRef<{client:Point2;pan:Point2}|null>(null);
-  const annotations=useMemo(()=>createPlanAnnotations(project,activeLevelId),[project,activeLevelId]);
-  const buildingBounds=useMemo(()=>modelBounds(project.elements),[project.elements]);
+  const rendered=useMemo(()=>visibleViewportElements(project,props.hiddenIds,props.isolatedIds),[project,props.hiddenIds,props.isolatedIds]);
+  const displayProject=useMemo(()=>({...project,elements:rendered}),[project,rendered]);
+  const annotations=useMemo(()=>createPlanAnnotations(displayProject,activeLevelId),[displayProject,activeLevelId]);
+  const levelElements=useMemo(()=>rendered.filter(element=>element.levelId===activeLevelId),[rendered,activeLevelId]);
+  const buildingBounds=useMemo(()=>modelBounds(levelElements),[levelElements]);
   const bounds=useMemo(()=>{if(!annotations.length)return buildingBounds;const notes=drawingBounds(annotations);return{...buildingBounds,minX:Math.min(buildingBounds.minX,notes.minX),minY:Math.min(buildingBounds.minY,notes.minY),maxX:Math.max(buildingBounds.maxX,notes.maxX),maxY:Math.max(buildingBounds.maxY,notes.maxY)};},[buildingBounds,annotations]);
-  const baseWidth=Math.max(8,bounds.maxX-bounds.minX+4),baseHeight=Math.max(7,bounds.maxY-bounds.minY+4);
-  const viewWidth=baseWidth/zoom,viewHeight=baseHeight/zoom;
-  const viewX=(bounds.minX+bounds.maxX)/2-viewWidth/2+pan.x,viewY=(bounds.minY+bounds.maxY)/2-viewHeight/2+pan.y;
-  const visible=project.elements.filter(e=>e.levelId===activeLevelId).sort((a,b)=>layerOrder[a.kind]-layerOrder[b.kind]);
+  const selection=levelElements.filter(element=>selectedIds.includes(element.id));
+  const frame=useViewportFrame(bounds,selection.length?modelBounds(selection):null,fitKey,props.fitSelectionKey,`${project.id}:${activeLevelId}:${viewMode}:${JSON.stringify([props.hiddenIds,props.isolatedIds])}`);
+  const {width:viewWidth,height:viewHeight,x:viewX,y:viewY,pan,setPan}=frame;
+  const visible=[...levelElements].sort((a,b)=>layerOrder[a.kind]-layerOrder[b.kind]);
   const gridId=`plan-grid-${project.id.replace(/[^a-zA-Z0-9]/g,'')}`;
-  useEffect(()=>{setZoom(1);setPan({x:0,y:0});},[fitKey,project.id]);
   useEffect(()=>{setDrawing(null);setDragging(null);setNotice('');},[tool,activeLevelId,viewMode]);
   useEffect(()=>{
-    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'){setDrawing(null);setDragging(null);setNotice('');} };
+    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!viewportTextEntry(e.target)){setDrawing(null);setDragging(null);panStart.current=null;setNotice('');onSelect([]);props.onCancelInteraction?.();} };
     window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey);
-  },[]);
+  },[onSelect,props.onCancelInteraction]);
+  useEffect(()=>{const svg=svgRef.current,prevent=(event:WheelEvent)=>event.preventDefault();svg?.addEventListener('wheel',prevent,{passive:false});return()=>svg?.removeEventListener('wheel',prevent);},[viewMode]);
   function point(event:{clientX:number;clientY:number},doSnap=true):Point2 {
     const svg=svgRef.current;if(!svg)return{x:0,y:0};
     const p=svg.createSVGPoint();p.x=event.clientX;p.y=event.clientY;
@@ -79,18 +114,20 @@ export default function PlanEditor(props:ModelViewportProps) {
     return{x:doSnap?snap(transformed.x):transformed.x,y:doSnap?snap(transformed.y):transformed.y};
   }
   function begin(event:ReactPointerEvent<SVGSVGElement>) {
-    if(event.button===1||event.button===2){panStart.current={client:{x:event.clientX,y:event.clientY},pan};event.currentTarget.setPointerCapture(event.pointerId);event.preventDefault();return;}
+    if(event.button===1||event.button===2){panStart.current={client:{x:event.clientX,y:event.clientY},pan};event.currentTarget.setPointerCapture?.(event.pointerId);event.preventDefault();return;}
+    if(event.button!==0)return;
     if(tool==='select'){onSelect([]);return;}
-    const p=point(event);setDrawing({start:p,end:p});setNotice('');event.currentTarget.setPointerCapture(event.pointerId);
+    const p=point(event);setDrawing({start:p,end:p});setNotice('');event.currentTarget.setPointerCapture?.(event.pointerId);
   }
   function move(event:ReactPointerEvent<SVGSVGElement>) {
-    if(panStart.current){const box=svgRef.current?.getBoundingClientRect();if(box)setPan({x:panStart.current.pan.x-(event.clientX-panStart.current.client.x)*viewWidth/box.width,y:panStart.current.pan.y-(event.clientY-panStart.current.client.y)*viewHeight/box.height});return;}
+    if(panStart.current){const box=svgRef.current?.getBoundingClientRect();if(box?.width&&box.height)setPan({x:panStart.current.pan.x-(event.clientX-panStart.current.client.x)*viewWidth/box.width,y:panStart.current.pan.y-(event.clientY-panStart.current.client.y)*viewHeight/box.height});return;}
     const p=point(event);
     if(drawing)setDrawing({...drawing,end:p});
     if(dragging)setDragging({...dragging,delta:{x:p.x-dragging.start.x,y:p.y-dragging.start.y}});
   }
   function finish(event:ReactPointerEvent<SVGSVGElement>) {
     if(panStart.current){panStart.current=null;return;}
+    if(event.button!==0)return;
     if(dragging){const {id,original,delta}=dragging;if(Math.abs(delta.x)+Math.abs(delta.y)>.01)onUpdate(id,{x:original.x+delta.x,y:original.y+delta.y});setDragging(null);return;}
     if(!drawing)return;
     const p=point(event),kind=tool as BimElement['kind'];
@@ -99,16 +136,16 @@ export default function PlanEditor(props:ModelViewportProps) {
     setDrawing(null);
   }
   function select(event:ReactPointerEvent<SVGGElement>,e:BimElement){
-    if(tool!=='select')return;
+    if(tool!=='select'||event.button!==0)return;
     event.stopPropagation();
     const additive=event.ctrlKey||event.metaKey||event.shiftKey;
     onSelect(additive?(selectedIds.includes(e.id)?selectedIds.filter(id=>id!==e.id):[...selectedIds,e.id]):[e.id]);
-    if(e.editable&&!additive){setDragging({id:e.id,start:point(event),original:e,delta:{x:0,y:0}});svgRef.current?.setPointerCapture(event.pointerId);}
+    if(e.editable&&!additive){setDragging({id:e.id,start:point(event),original:e,delta:{x:0,y:0}});svgRef.current?.setPointerCapture?.(event.pointerId);}
   }
-  function wheel(event:ReactWheelEvent<SVGSVGElement>){if(event.ctrlKey||event.metaKey)event.preventDefault();setZoom(z=>Math.min(5,Math.max(.35,z*(event.deltaY>0?.9:1.1))));}
+  function wheel(event:ReactWheelEvent<SVGSVGElement>){frame.zoomBy(event.deltaY>0?.9:1.1,point(event,false));}
   const drawingWidth=drawing?Math.abs(drawing.end.x-drawing.start.x):0,drawingDepth=drawing?Math.abs(drawing.end.y-drawing.start.y):0;
   const modeName=project.levels.find(l=>l.id===activeLevelId)?.name??'Building';
-  if(viewMode==='section'||viewMode==='elevation')return <div className="plan-editor model-projection"><Projection {...{project,viewMode,selectedIds,onSelect,showGrid}}/><div className="viewport-view-name">{viewMode==='section'?'Section A–A':'South elevation'}<span>ORTHOGRAPHIC</span></div></div>;
+  if(viewMode==='section'||viewMode==='elevation')return <div className="plan-editor model-projection"><Projection {...{viewMode,selectedIds,onSelect,showGrid,fitKey}} project={displayProject} fitSelectionKey={props.fitSelectionKey} visibilityKey={JSON.stringify([props.hiddenIds,props.isolatedIds])}/><div className="viewport-view-name">{viewMode==='section'?'Section A–A':'South elevation'}<span>ORTHOGRAPHIC</span></div></div>;
   return <div className="plan-editor" style={{position:'relative',width:'100%',height:'100%',minHeight:350,overflow:'hidden',background:'#f9f8f5'}}>
     <svg ref={svgRef} className="plan-svg" width="100%" height="100%" viewBox={`${viewX} ${viewY} ${viewWidth} ${viewHeight}`} onPointerDown={begin} onPointerMove={move} onPointerUp={finish} onPointerCancel={()=>{setDrawing(null);setDragging(null);panStart.current=null;}} onWheel={wheel} onContextMenu={e=>e.preventDefault()} style={{display:'block',touchAction:'none',cursor:tool==='select'?'default':'crosshair',userSelect:'none'}} aria-label={`${modeName} editable floor plan`}>
       <defs><pattern id={gridId} x="0" y="0" width="1" height="1" patternUnits="userSpaceOnUse"><path d="M 1 0 L 0 0 0 1" fill="none" stroke="#e7e5e1" strokeWidth=".012"/></pattern><pattern id={`${gridId}-dots`} x="0" y="0" width=".25" height=".25" patternUnits="userSpaceOnUse"><circle cx="0" cy="0" r=".009" fill="#dedcd7"/></pattern></defs>
@@ -123,8 +160,9 @@ export default function PlanEditor(props:ModelViewportProps) {
     </svg>
     <div className="viewport-view-name">{modeName}<span>FLOOR PLAN · 0.25 M SNAP</span></div>
     <div className="viewport-north" aria-label="North"><Compass size={25} strokeWidth={1.2}/><span>N</span></div>
-    <div className="viewport-nav"><button title="Zoom in" aria-label="Zoom in" onClick={()=>setZoom(z=>Math.min(5,z*1.2))}><Plus size={16}/></button><button title="Zoom out" aria-label="Zoom out" onClick={()=>setZoom(z=>Math.max(.35,z/1.2))}><Minus size={16}/></button><button title="Fit plan" aria-label="Fit plan" onClick={()=>{setZoom(1);setPan({x:0,y:0});}}><Scan size={16}/></button></div>
+    <ViewNavigation zoomBy={frame.zoomBy} fitAll={frame.fitAll} fitSelection={frame.fitSelection} hasSelection={selection.length>0}/>
+    <div className="viewport-orbit-hint">Middle or right drag to pan · Scroll to zoom · Shift-click to add to selection</div>
     {(notice||tool!=='select')&&<div className={`viewport-tool-hint ${notice?'has-warning':''}`} role="status">{notice||(['door','window'].includes(tool)?`Click a wall to place a ${tool}`:`Drag to draw ${tool==='wall'?'a wall':`a ${tool}`} · Escape to cancel`)}</div>}
-    {!visible.length&&tool==='select'&&<div className="viewport-empty"><span>Your next idea starts here</span><p>Choose a drawing tool to start building on this level.</p></div>}
+    {!visible.length&&tool==='select'&&<div className="viewport-empty"><span>{project.elements.length?'No visible elements on this level':'Your next idea starts here'}</span><p>{project.elements.length?'Show all elements or choose another level.':'Choose a drawing tool to start building on this level.'}</p></div>}
   </div>;
 }

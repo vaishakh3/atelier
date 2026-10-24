@@ -51,7 +51,8 @@ describe('coordinated drawing outputs',()=>{
   wall.properties.annotation='Revised lining specification';
   const updated=createPlanDrawing(project,'level-0');expect(updated.primitives.some(p=>p.text==='Confirm acoustic lining')).toBe(false);expect(updated.primitives.some(p=>p.text==='Revised lining specification')).toBe(true);
   const html=renderToStaticMarkup(createElement(PlanEditor,{project,selectedIds:[],onSelect:()=>{},viewMode:'plan',activeLevelId:'level-0',tool:'select',onCreate:()=>{},onUpdate:()=>{},showGrid:true,ghostUpper:false,fitKey:0}));
-  expect(html).toContain('Revised lining specification');expect(html).toContain('data-element-id="wall-n-00"');expect(html).toContain('pointer-events:none');expect(html).toContain('12.30 m');
+  expect(html).toContain('Revised lining specification');expect(html).toContain('data-element-id="wall-n-00"');expect(html).toContain('pointer-events:none');// The live ground-floor dimension excludes the upper roof overhang.
+  expect(html).toContain('12.02 m');expect(html).not.toContain('12.30 m');
  });
  it('builds a real multipage vector review with all levels, provenance and objective',()=>{
   const project=createDemoProject(),schedule=buildSchedule(project),cost=estimate(project,schedule);

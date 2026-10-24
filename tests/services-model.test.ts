@@ -192,4 +192,15 @@ describe('services schema and reviewed transaction boundaries', () => {
     expect(servicePlanIsCurrent(project, missingRoute)).toBe(false);
     expect(servicePlanIsCurrent(project, plan)).toBe(true);
   });
+
+  it('checks the former locked room when its last service point is rehosted elsewhere', () => {
+    const project = fixture(); project.services = createServicePlan(project);
+    project.services.points = project.services.points.filter(point => point.roomId !== 'living' || point.kind === 'light');
+    project.services = rerouteServicePlan(project, project.services);
+    project.constraints.lockedElementIds.push('living');
+    const candidate = structuredClone(project), moved = candidate.services!.points.find(point => point.roomId === 'living')!;
+    moved.roomId = 'kitchen'; moved.offset.x = 1.5;
+    candidate.services = rerouteServicePlan(candidate, candidate.services!);
+    expect(() => acceptServiceProposal(project, structuredClone(project), candidate, 'admin')).toThrow(/living is locked/);
+  });
 });

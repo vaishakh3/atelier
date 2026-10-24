@@ -18,21 +18,23 @@ The demonstration house and service proposals are deterministic and run locally.
 7. Inspect the proposal card and its affected connections before accepting. The bathroom function and its three fixtures move into the existing Study shell; the original bathroom becomes Study. Four bedrooms remain. Six water/drainage connections change. Walls, doors and windows stay in place, and electrical points remain with their existing room hosts. Review privacy, circulation, room suitability, ventilation, wet-zone electrical separation, waterproofing and penetrations before treating this as a viable design.
 8. Compare the quantities and service subtotal. Choose **Accept services proposal**, then use **Undo last transaction** and **Redo transaction** to show that the room uses, fixtures, connections and quantities revert and return together. Changing the house invalidates the earlier construction-scope review; a retained date is not a freshly approved programme.
 9. Open **Review construction scope → Review model quantities** again. Review the updated service effort and retained planner assumptions, then **Accept reviewed activity scope**. Show the resulting preliminary programme.
-10. Save and wait for the workspace's saved status. Reload the browser or reopen the same desktop profile and confirm that the accepted model, services, rates and reviewed schedule return. Browser save/reload was verified for this demonstration; final packaged native verification was pending when this walkthrough was written.
+10. Save and wait for the workspace's saved status. Reload the browser or fully quit and reopen the same desktop profile and confirm that the accepted model, services, rates and reviewed schedule return. Both browser reload and the installed macOS 0.6.0 app's full restart were verified for this demonstration.
 
-## Recorded browser checkpoint
+## Recorded browser and native checkpoint
 
-The following results were recorded on 24 October 2026 with the same demo house, explicit illustrative rates and default calendar. They are fixture-specific arithmetic, not promised project costs, installation durations or survey accuracy. UI values may be rounded more coarsely.
+The following results were recorded on 24 October 2026 in browser QA and reproduced in the installed **Atelier 0.6.0 macOS arm64 app**, using a separate QA project/profile. The house contained **90 architectural elements, two levels, four bedrooms, 54 service points and 58 routes**. Explicit illustrative rates and the default calendar were used. These are fixture-specific arithmetic, not promised project costs, installation durations or survey accuracy. UI values may be rounded more coarsely.
 
 | Measurement | Baseline | Upper bathroom ↔ Study |
 |---|---:|---:|
 | Modelled cold-water routes | 35.26 m | 62.61 m |
-| Modelled drainage routes | 37.01 m | 64.35 m |
+| Modelled drainage routes | 37.01 m | 64.36 m |
 | All modelled service routes | 515.154 m | 569.842692 m |
 | Known services subtotal | INR 179,964.27 | INR 193,909.90 |
 | Services installation effort | 21.4687 crew-days | 23.0312 crew-days |
 | Reviewed construction programme | 110 calendar / 95 working days | 113 calendar / 97 working days |
 | Preliminary finish | 19 February 2027 | 22 February 2027 |
+
+The native walkthrough completed proposal acceptance, illustrative rates, baseline scope review, bathroom ↔ Study acceptance, Undo, Redo and updated scope review. A full app restart retained the final **v8** project, service model, entered rates and reviewed programme. These recorded results verify the 0.6.0 services journey; they do not establish verification of subsequent navigation or command-palette changes. See [validation evidence](VALIDATION.md) for release-specific checks.
 
 The services subtotal is separate from the whole-building estimate; it excludes unrepresented equipment, fittings, testing, taxes and specialist scope unless explicitly allowed in entered rates. Centreline route lengths include vertical segments and measure drawn branches individually; they do not establish conductor multiplicity, shared distribution sizing or procurement quantities. Crew-days express installation effort, while programme dates depend on reviewed activities, dependencies, working days, procurement and crew constraints. The example shows a cost/time consequence, not a savings claim or an optimum.
 
