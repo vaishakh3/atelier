@@ -29,6 +29,10 @@ This user-authorized extension adds concept electrical/plumbing coordination to 
 | Limited calculations | Single-phase demand-current identity and horizontal-run/gradient fall arithmetic, with reference cases and visible assumptions. | No cable, protection, fault, earthing, hydraulic sizing, installation safety or legal certification. |
 | Connected demonstration | Browser and installed macOS house → services → changed bathroom function → six rerouted connections → reviewed estimate/schedule → accept/undo/redo. | Example prices are illustrative. Room-function swap retains shells/doors/windows and requires architectural access/ventilation review. Full engineering and competitor superiority are not established. |
 
+## Familiar model workflow — 0.6.1
+
+Quick access (Q / Cmd/Ctrl+K), command and model search, camera presets, fit-all/selection, visible-element selection, temporary hide/isolate/show-all, drawing-tool repetition and guarded keyboard shortcuts are implemented. The existing central canvas, project browser, contextual inspector and coordinated plan/section/elevation workflow remain. [VALIDATION.md](VALIDATION.md) distinguishes browser/automated evidence from the installed-app Keychain gate. This does not establish all Forma capabilities, zero learning effort or a measured switching advantage; terrain/context data, native proprietary-format editing, saved-view/proposal parity and environmental simulation remain separate gaps.
+
 ## Functional requirements
 
 | PRD requirement | Implemented behaviour | Automated evidence | Remaining acceptance or limitation |
