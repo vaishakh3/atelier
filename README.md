@@ -44,6 +44,16 @@ For AI, use **Settings → AI connection**. The default is **GPT-6.1 Sol** (`gpt
 - Publish immutable snapshots and version-specific comments. Compare revisions across geometry, types, specifications, quantities, rates, costs and programme. Share portable read-only review copies with an integrity checksum; these are not authenticated signatures or live collaboration links.
 - Export coordinated review PDFs, XLSX workbooks, quantity/model-schedule CSVs, IFC models and decision records. Room, door and window schedules retain source identifiers and missing-property warnings. Configured site checks add source-backed geometric-limit and Vaastu review pages/sheets; unconfigured projects retain the original eight workbook sheets.
 
+## Services coordination
+
+The optional **Services** workspace connects a residential concept to editable electrical points and cold-water/drainage fixtures. Review per-level plan layers, room-hosted placement, conceptual circuit groups and centreline routes. Services-aware review highlights wet-area grouping, upper-floor wet-room proximity and potential wall/slab/stair penetrations; these are geometric coordination proxies, not engineering approval.
+
+Point edits and same-floor bathroom function swaps stay detached until explicitly accepted. The swap retains the existing room shells, doors and windows, moves the bathroom fixtures, reroutes their connections and shows before/after quantities, known service subtotals and installation effort. Undo/redo restores the complete transaction. Architectural changes make services stale, and construction scope must be reviewed again before relying on updated programme dates.
+
+Rates and crew productivity start unknown. Enter project quotations and installation output, or deliberately choose clearly labelled illustrative demo rates. Service costs are included in the estimate with traceable quantities; overlapping MEP allowances need reconciliation. Scope omissions remain visible, and conceptual route length is not a procurement cable quantity. Limited calculations cover single-phase demand/current arithmetic and drainage fall from horizontal run and an entered gradient. They do not size cables, protection, earthing or pipes, verify gravity drainage, or establish compliance.
+
+An empty project offers a deterministic two-storey, four-bedroom demonstration. Service generation runs locally; the existing provider-backed architectural copilot is a separate workflow. Export services JSON and per-level SVG, or include services in the project JSON, review PDF and XLSX workbook. IFC currently exports the architectural model only. See the [connected demonstration walkthrough](docs/SERVICES_DEMO.md) for reproducible steps, recorded results and review boundaries.
+
 ## Storage and recovery
 
 Packaged applications require a real local identity. Projects, snapshots, comments, memberships and account records use authenticated AES-256-GCM storage. A random data key is protected by the operating system credential service. Linux requires Secret Service/KWallet; insecure `basic_text` fallback is rejected. Missing vault keys fail closed rather than silently replacing a key and orphaning records.

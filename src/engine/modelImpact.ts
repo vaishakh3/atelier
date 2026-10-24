@@ -2,6 +2,7 @@ import type {ActivityDefinition, CostResult, ElementKind, Project, Role, Schedul
 import {estimate} from './cost';
 import {buildSchedule,generateActivities,resolveModelQuantity,scheduleActivitySignature,scheduleModelSignature,scheduleReviewIsCurrent} from './schedule';
 import {sequenceBaselineSignature} from './scenarios';
+import {serviceInstallationActivities} from '../services/calculations';
 
 export interface ActivityScopeChange {
   activityId:string;
@@ -41,8 +42,8 @@ export interface ModelImpactPreview {
 
 const kinds:ElementKind[]=['slab','wall','roof','window','door','stair'];
 const unique=(ids:string[])=>[...new Set(ids)].sort();
-const sourceIds=(project:Project,activity:ActivityDefinition)=>unique(project.elements.filter(element=>element.kind===activity.category&&(!activity.sourceElementIds||activity.sourceElementIds.includes(element.id))).map(element=>element.id));
-const reviewSourceIds=(project:Project,activity:ActivityDefinition)=>activity.sourceElementIds?unique(activity.sourceElementIds):sourceIds(project,activity);
+const sourceIds=(project:Project,activity:ActivityDefinition)=>activity.servicePackage?unique((activity.servicePackage==='routes'?project.services?.routes:project.services?.points)?.map(source=>source.id)??[]):unique(project.elements.filter(element=>element.kind===activity.category&&(!activity.sourceElementIds||activity.sourceElementIds.includes(element.id))).map(element=>element.id));
+const reviewSourceIds=(project:Project,activity:ActivityDefinition)=>activity.servicePackage?sourceIds(project,activity):activity.sourceElementIds?unique(activity.sourceElementIds):sourceIds(project,activity);
 const definitions=(project:Project)=>project.schedule.activities.length?structuredClone(project.schedule.activities):generateActivities(project);
 const same=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const scopeSignature=(project:Project)=>JSON.stringify(kinds.map(kind=>[kind,project.elements.filter(element=>element.kind===kind).map(element=>element.id).sort()]));
@@ -73,6 +74,14 @@ export function previewScheduleRefresh(project:Project,baseline:Project=project)
   const staleSourceIds=unique(original.flatMap(activity=>(activity.sourceElementIds??[]).filter(id=>!project.elements.some(element=>element.id===id))));
   const removed=new Map<string,ActivityDefinition>();
   for(const activity of activities) {
+    if(activity.servicePackage&&project.services){
+      const calculated=serviceInstallationActivities(project,activity.predecessors,activity.predecessors).find(candidate=>candidate.servicePackage===activity.servicePackage);
+      if(calculated){
+        activity.quantity=calculated.quantity;activity.productivity=calculated.productivity;delete activity.fixedDuration;
+        note(activity.id,'Service installation effort recalculated from current conceptual routes/point counts and entered productivity. Existing crew limits and dependencies retained; review before accepting.');
+        if(activity.productivity<=0)blockingIssues.push(`${activity.name}: service installation productivity or routing is unresolved.`);
+      }else blockingIssues.push(`${activity.name}: its represented service package no longer exists. Review task removal and dependencies explicitly.`);
+    }
     const missing=(activity.sourceElementIds??[]).filter(id=>!project.elements.some(element=>element.id===id));
     if(missing.length) {
       const peers=activities.filter(other=>other.category===activity.category);
@@ -132,7 +141,7 @@ export function previewScheduleRefresh(project:Project,baseline:Project=project)
     if(same(before,after)&&same(beforeSourceIds,afterSourceIds)&&!reasons.has(id))return[];
     return[{activityId:id,before,after,beforeSourceIds,afterSourceIds,reasons:reasons.get(id)??['Model source membership changed.']}];
   });
-  const activityFields=['quantity','unit','productivity','minDuration','predecessors','crewDemand','maxCrews','leadTime','fixedDuration','quantityMode','sourceElementIds','productivityMode'] as const;
+  const activityFields=['quantity','unit','productivity','minDuration','predecessors','crewDemand','maxCrews','leadTime','fixedDuration','quantityMode','sourceElementIds','productivityMode','servicePackage'] as const;
   for(const change of changes)for(const field of activityFields) {
     if(same(change.before?.[field],change.after?.[field]))continue;
     const keys=[field,`schedule.${field}`,`${change.activityId}.*`,`${change.activityId}.${field}`,`activities.${change.activityId}.${field}`,`schedule.activities.${change.activityId}.${field}`];

@@ -1,5 +1,7 @@
 import type { ActivityDefinition, Project, ScheduleResult, ScheduledActivity } from '../domain/types';
 import { quantities } from './quantities';
+import {calculateServiceProgramme,serviceInstallationActivities} from '../services/calculations';
+import {servicePlanIsCurrent} from '../services/model';
 
 const DAY = 86_400_000;
 const iso = (date:Date) => date.toISOString().slice(0, 10);
@@ -11,6 +13,7 @@ export function scheduleModelSignature(project:Project):string {
     levels:project.levels.map(({id,elevation})=>({id,elevation})).sort((a,b)=>a.id.localeCompare(b.id)),
     elements:project.elements.filter(element=>element.kind!=='reference').map(element=>({id:element.id,kind:element.kind,levelId:element.levelId,typeId:element.typeId,hostId:element.hostId??null,x:element.x,y:element.y,z:element.z,width:element.width,depth:element.depth,height:element.height,rotation:element.rotation})).sort((a,b)=>a.id.localeCompare(b.id)),
     types:project.types.filter(type=>project.elements.some(element=>element.typeId===type.id)).map(({id,kind,unit,productivity})=>({id,kind,unit,productivity})).sort((a,b)=>a.id.localeCompare(b.id)),
+    ...(project.services?{services:{modelSignature:project.services.modelSignature,points:project.services.points,routes:project.services.routes,productivity:project.services.assumptions.rates.map(({key,unit,productivity})=>({key,unit,productivity})).sort((a,b)=>a.key.localeCompare(b.key)),crews:project.services.assumptions.crews}}:{}),
   });
 }
 
@@ -21,6 +24,7 @@ export function scheduleActivitySignature(activities:ActivityDefinition[]):strin
     productivityMode:activity.productivityMode??'manual',productivity:activity.productivityMode==='type'?null:activity.productivity,
     minDuration:activity.minDuration,predecessors:[...activity.predecessors].sort(),crewDemand:activity.crewDemand,maxCrews:activity.maxCrews,leadTime:activity.leadTime,
     fixedDuration:activity.fixedDuration??null,sourceElementIds:activity.sourceElementIds?[...new Set(activity.sourceElementIds)].sort():null,
+    ...(activity.servicePackage?{servicePackage:activity.servicePackage}:{}),
   })).sort((a,b)=>a.id.localeCompare(b.id)));
 }
 
@@ -45,6 +49,7 @@ export function generateActivities(project:Project):ActivityDefinition[] {
   const wallArea = area('wall');
   const windowCount = project.elements.filter(element => element.kind === 'window').length;
   const doorCount = project.elements.filter(element => element.kind === 'door').length;
+  const serviceTasks=serviceInstallationActivities(project,['walls'],['internal-finishes']);
   const make = (id:string, name:string, category:ActivityDefinition['category'], quantity:number, unit:string, productivity:number, minDuration:number, predecessors:string[], leadTime = 0, fixedDuration?:number, quantityMode:'model'|'manual' = 'manual'):ActivityDefinition => ({ id, name, category, quantity, unit, productivity, minDuration, predecessors, crewDemand:1, maxCrews:1, leadTime, quantityMode, productivityMode:quantityMode === 'model' ? 'type' : 'manual', ...(fixedDuration !== undefined ? { fixedDuration } : {}) });
   return [
     make('site', 'Site setup & setting out', 'allowance', 1, 'scope item', 1, 2, [], 0, 2),
@@ -55,9 +60,9 @@ export function generateActivities(project:Project):ActivityDefinition[] {
     make('roof', 'Roof assembly', 'roof', area('roof'), 'm² plan area', 30, 2, ['walls'], 5, undefined, 'model'),
     make('openings', 'Windows installation', 'window', windowCount, 'ea', 6, 1, ['walls'], 10, undefined, 'model'),
     make('doors', 'Doors installation', 'door', doorCount, 'ea', 6, 1, ['walls'], 5, undefined, 'model'),
-    make('mep', 'Services rough-in — confirm specialist scope', 'allowance', floorArea || footprint, 'm² floor area proxy', 25, 3, ['walls']),
-    make('internal-finishes', 'Internal finishes — confirm finish scope', 'room', floorArea + wallArea || footprint, 'm² finish proxy', 40, 3, ['roof', 'openings', 'doors', 'mep']),
-    make('external-finishes', 'External finishes & handover', 'allowance', wallArea || footprint, 'm² wall proxy', 35, 2, ['roof', 'openings', 'doors']),
+    ...(project.services?serviceTasks:[make('mep', 'Services rough-in — confirm specialist scope', 'allowance', floorArea || footprint, 'm² floor area proxy', 25, 3, ['walls'])]),
+    make('internal-finishes', 'Internal finishes — confirm finish scope', 'room', floorArea + wallArea || footprint, 'm² finish proxy', 40, 3, ['roof', 'openings', 'doors',...(project.services?serviceTasks.filter(task=>task.servicePackage==='routes').map(task=>task.id):['mep'])]),
+    make('external-finishes', 'External finishes & handover', 'allowance', wallArea || footprint, 'm² wall proxy', 35, 2, ['roof', 'openings', 'doors',...serviceTasks.filter(task=>task.servicePackage==='points').map(task=>task.id)]),
   ];
 }
 
@@ -112,6 +117,24 @@ export function buildSchedule(project:Project, overrides:{crews?:number;procurem
   const failure = (reason:string):ScheduleResult => ({ activities:[], startDate:config.startDate, finishDate:config.startDate, durationDays:0, workingDays:0, feasible:false, issues:[...issues, reason], criticalPath:[], crewDays:0 });
   if(config.modelReviewRequired)return failure('The model changed after the construction plan was reviewed. Review model quantities and activity scope before using completion dates or ranking scenarios.');
   if(config.modelReview&&(config.modelReview.modelSignature!==scheduleModelSignature(project)||config.modelReview.activitySignature!==scheduleActivitySignature(input)))return failure('The reviewed model scope or activity network changed. Review model quantities and activity scope again before using completion dates or ranking scenarios.');
+  if(project.services){
+    if(!servicePlanIsCurrent(project,project.services))return failure('The service plan is stale. Review and reroute services before using construction completion dates.');
+    const programme=calculateServiceProgramme(project,project.services);
+    if(programme.workDays===null)return failure('Service installation productivity or scope is unresolved. Enter and review installation work before using completion dates.');
+    const mapped=input.filter(activity=>activity.servicePackage),expected=serviceInstallationActivities(project,[],[]);
+    if(mapped.length){
+      for(const template of expected){
+        const matches=mapped.filter(activity=>activity.servicePackage===template.servicePackage);
+        if(matches.length!==1)return failure('Service work packages must map routes and points once each. Review missing or duplicate service installation tasks.');
+        const activity=matches[0],near=(a:number,b:number)=>Math.abs(a-b)<=Math.max(1e-12,Math.abs(b)*1e-10);
+        if(activity.category!=='allowance'||activity.quantityMode!=='manual'||activity.productivityMode!=='manual'||activity.unit!==template.unit||!near(activity.quantity,template.quantity)||!near(activity.productivity,template.productivity)||activity.fixedDuration!==undefined||activity.sourceElementIds?.length)return failure(`${activity.name}: mapped service effort no longer matches current route quantities, point counts and entered productivity. Review and accept service work scope before using completion dates; detach the service mapping explicitly to enter a separate manual work package.`);
+      }
+      if(mapped.length!==expected.length)return failure('A mapped service work package has no represented scope. Review task removal and dependencies explicitly.');
+    }
+    if(config.activities.length&&!mapped.length)issues.push('Existing manual services activities remain unchanged. Concept service installation effort is shown separately; reconcile its scope with the existing work packages before claiming the full construction completion date.');
+    issues.push(...programme.issues);
+  }
+  else if(input.some(activity=>activity.servicePackage))return failure('Mapped service installation tasks have no service plan. Review service scope before using completion dates.');
   if(!config.activities.length&&!project.elements.some(element=>!['room','reference'].includes(element.kind)))return failure('There is no modelled construction work or entered activity network. Define work scope before estimating completion; an empty model is not a zero-day building.');
   if (!isDate(config.startDate)) return failure('Project start date must be a valid ISO date.');
   const calendar = Array.from(new Set(config.workingDays));

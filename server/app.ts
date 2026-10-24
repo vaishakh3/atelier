@@ -30,8 +30,10 @@ const projectKey=(id:string)=>`project:${safeId(id)}`;
 const etag=(project:Project)=>`"${digest(JSON.stringify(project))}"`;
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 function contributorCheck(project:Project,previous:Project){
-  const allowed=new Set(['types','allowances','schedule','constraints','audit','updatedAt','version']);
-  for(const key of Object.keys(project)as(keyof Project)[])if(!allowed.has(key)&&!equal(project[key],previous[key]))throw new ApiError(403,'FORBIDDEN','Contributors can edit rates and planning inputs only');
+  const allowed=new Set(['types','allowances','schedule','constraints','audit','updatedAt','version','services']);
+  for(const key of new Set([...Object.keys(project),...Object.keys(previous)])as Set<keyof Project>)if(!allowed.has(key)&&!equal(project[key],previous[key]))throw new ApiError(403,'FORBIDDEN','Contributors can edit rates and planning inputs only');
+  const {assumptions:_oldAssumptions,...oldDesign}=previous.services??{};const {assumptions:_newAssumptions,...newDesign}=project.services??{};
+  if(!previous.services&&project.services||previous.services&&!project.services||!equal(oldDesign,newDesign))throw new ApiError(403,'FORBIDDEN','Contributors can edit services assumptions only; an editor must change service points or routes');
   if(!equal(project.constraints.lockedElementIds,previous.constraints.lockedElementIds)||!equal(project.constraints.lockedProperties,previous.constraints.lockedProperties))throw new ApiError(403,'FORBIDDEN','Only an architect or project administrator can change design locks');
   if(project.types.length!==previous.types.length||project.types.some(type=>{const old=previous.types.find(t=>t.id===type.id);return!old||['id','kind','name','material','unit','approved'].some(key=>(type as unknown as Record<string,unknown>)[key] !== (old as unknown as Record<string,unknown>)[key]);}))throw new ApiError(403,'FORBIDDEN','Contributors cannot change architectural type definitions');
 }

@@ -1,6 +1,7 @@
 import type { CostLine, CostResult, Project, ScheduleResult } from '../domain/types';
 import { quantities } from './quantities';
 import { buildSchedule } from './schedule';
+import {calculateServiceEstimate} from '../services/calculations';
 
 const money = (value:number) => Math.round(value * 100) / 100;
 const usableRate = (value:number|null|undefined):value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -52,6 +53,14 @@ export function estimate(project:Project, scheduleResult?:ScheduleResult):CostRe
     allowances += amount ?? 0;
     lines.push({ id:`allowance:${allowance.id}`, name:allowance.name, sourceIds:[], quantity:1, unit:'allowance', material:null, labour:null, equipment:null, waste:0, total:amount, formula:`Independent allowance = ${amount ?? 'unknown'}`, rateDate:'', issues:known ? [] : ['Allowance amount is unknown, not zero.'] });
   }
+  let serviceUnresolved=false;
+  if(project.services){
+    const services=calculateServiceEstimate(project,project.services);
+    lines.push(...services.lines);
+    for(const line of services.lines){material+=line.material??0;labour+=line.labour??0;waste+=line.waste;count++;if(line.total!==null)complete++;}
+    issues.push(...services.issues);
+    serviceUnresolved=!services.current||services.lines.length===0||services.unknownCount>0||services.issues.some(issue=>issue.includes('may overlap'));
+  }
   const schedule = scheduleResult ?? buildSchedule(project);
   const overheadRateKnown = usableRate(project.schedule.overheadPerDay);
   const crewRateKnown = usableRate(project.schedule.crewCostPerDay);
@@ -77,5 +86,5 @@ export function estimate(project:Project, scheduleResult?:ScheduleResult):CostRe
   issues.push('Preliminary estimate. Completeness covers mapped model items and included allowances; unentered scope is not represented. Rates are user-supplied.');
   if (complete < count) issues.push('Total is a known subtotal: unknown components and allowances are excluded until resolved.');
   const completeness = count ? Math.round(100 * complete / count) : 0;
-  return { lines, material:money(material), labour:money(labour), equipment:money(equipment), waste:money(waste), allowances:money(allowances), overhead, total:money(material + labour + equipment + waste + allowances + overhead), completeness:(!overheadRateKnown || !crewRateKnown || !schedule.feasible) ? Math.min(completeness, 99) : completeness, issues:Array.from(new Set(issues)) };
+  return { lines, material:money(material), labour:money(labour), equipment:money(equipment), waste:money(waste), allowances:money(allowances), overhead, total:money(material + labour + equipment + waste + allowances + overhead), completeness:(!overheadRateKnown || !crewRateKnown || !schedule.feasible||serviceUnresolved) ? Math.min(completeness, 99) : completeness, issues:Array.from(new Set(issues)) };
 }

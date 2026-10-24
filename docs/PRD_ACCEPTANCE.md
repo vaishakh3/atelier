@@ -17,6 +17,18 @@ The original PRD excludes code-compliance sign-off and automatic permit processi
 | Optional Vaastu preferences | Client/consultant-selected preferred or avoided compass sectors, evaluated against explicitly tagged room/entrance/stair metadata and entered true north. No universal traditional profile is imposed. | Missing orientation, plot, tags or matching elements remain unevaluated. This is a directional preference check, separate from law and safety, without scientific or statutory certification. |
 | Review/export provenance | Proposed layouts include current site-check summaries. PDF, workbook and decision JSON carry source metadata, actual/entered values, unknowns, clauses, preference results and coverage gaps. Revision comparison includes site settings. | Configured workbooks add Site checks and Vaastu preferences sheets. Export evidence is recorded in [VALIDATION.md](VALIDATION.md); a clean document does not establish professional approval. |
 
+## Residential services extension — 0.6.0
+
+This user-authorized extension adds concept electrical/plumbing coordination to the existing architectural workflow. It is separate from statutory engineering sign-off.
+
+| Scope | Implemented and verified | Boundary |
+|---|---|---|
+| Services-aware layout review | Wet-area grouping/stacking distance proxies and proposed wall/slab/stair penetration review with source IDs. | No optimality, physical clearance, approved shaft or structural opening claim. |
+| Electrical/plumbing plans | Editable room-hosted points, conceptual circuit groups, cold-water/drainage branches, multi-floor routing, explicit acceptance, save and undo/redo. | Rectangular classified rooms, up to 100 programme rooms, one panel/inlet/outlet; hot water, venting, specialist/pool design and fabrication are excluded. |
+| Cost/construction time | Current route lengths and fixture counts, entered rates/output per crew-day, visible unknowns, services added to overall estimate and reviewed installation phases. | Drawn route centrelines are not conductor procurement quantities; shared branches may overlap. Manual legacy tasks are retained for reconciliation. |
+| Limited calculations | Single-phase demand-current identity and horizontal-run/gradient fall arithmetic, with reference cases and visible assumptions. | No cable, protection, fault, earthing, hydraulic sizing, installation safety or legal certification. |
+| Connected demonstration | Browser and installed macOS house → services → changed bathroom function → six rerouted connections → reviewed estimate/schedule → accept/undo/redo. | Example prices are illustrative. Room-function swap retains shells/doors/windows and requires architectural access/ventilation review. Full engineering and competitor superiority are not established. |
+
 ## Functional requirements
 
 | PRD requirement | Implemented behaviour | Automated evidence | Remaining acceptance or limitation |
