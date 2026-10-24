@@ -90,6 +90,17 @@ describe('reviewable copilot house layouts',()=>{
   expect(base.commit).not.toHaveBeenCalled();expect(api.requests).toHaveLength(1);
  });
 
+ it('keeps design notes compact in both reviews while leaving a real stale-preview blocker visible',async()=>{
+  const project=createBlankProject('Notes and blockers'),before=structuredClone(project),base=props(project),notes=['Review room dimensions before detailing.','Review the service route.','Unpriced specialist work is excluded.'];
+  provider((source,ids)=>({...layoutProposal(source,ids),issues:notes}));const view=render(<InspectorCopilot {...base}/>);sendPrompt();await screen.findByText('House layout preview');
+  const summary=screen.getByText('Design notes & assumptions').closest('summary')!,details=summary.closest('details')!;expect(details.open).toBe(false);expect(summary.textContent).toContain('· 3');expect(screen.queryByRole('alert')).toBeNull();expect(document.querySelector('.proposal .notice.warning')).toBeNull();
+  fireEvent.click(summary);expect(within(details).getAllByRole('listitem').map(item=>item.textContent)).toEqual(notes);fireEvent.click(summary);expect(details.open).toBe(false);
+  fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog'),modalSummary=within(dialog).getByText('Design notes & assumptions').closest('summary')!,modalDetails=modalSummary.closest('details')!;
+  expect(modalDetails.open).toBe(false);expect(modalSummary.tabIndex).toBe(0);fireEvent.click(modalSummary);expect(within(modalDetails).getAllByRole('listitem').map(item=>item.textContent)).toEqual(notes);expect((within(dialog).getByRole('button',{name:'Accept layout'})as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(within(dialog).getByRole('button',{name:'Close dialog'}));view.rerender(<InspectorCopilot {...base} project={{...project,version:project.version+1}}/>);
+  expect(details.open).toBe(false);const alert=screen.getByRole('alert');expect(alert.textContent).toMatch(/project changed/i);expect(alert.querySelector('.notice.warning')).toBeTruthy();expect((screen.getByRole('button',{name:'Accept layout'})as HTMLButtonElement).disabled).toBe(true);expect(base.commit).not.toHaveBeenCalled();expect(project).toEqual(before);
+ });
+
  it('renders a rotated selected-slab proposal with actual feet dimensions and its retained footprint',()=>{
   const source=createBlankProject('Existing footprint');source.units='ft';const type=source.types.find(type=>type.kind==='slab')!;
   source.elements.push({id:'slab-boundary',kind:'slab',name:'Surveyed slab',levelId:source.levels[0].id,typeId:type.id,material:type.material,x:24,y:-7,z:-.2,width:16,depth:20,height:.2,rotation:37,editable:true,properties:{}});
@@ -236,11 +247,12 @@ describe('reviewable copilot house layouts',()=>{
  });
 
  it('shows unresolved activity durations as unavailable while keeping unknown costs visible',async()=>{
-  const source=createBlankProject('Unresolved productivity'),base=props(source),wallType=source.types.find(type=>type.kind==='wall')!;wallType.materialRate=null;source.schedule.activities=[{id:'unresolved-task',name:'Unresolved task',category:'allowance',quantity:1,unit:'scope item',productivity:1,minDuration:1,predecessors:['missing-prerequisite'],crewDemand:1,maxCrews:1,leadTime:0,quantityMode:'manual'}];
+  const source=createBlankProject('Unresolved productivity'),base=props(source),wallType=source.types.find(type=>type.kind==='wall')!;wallType.materialRate=null;source.schedule.activities=[{id:'unresolved-task',name:'Unresolved task',category:'allowance',quantity:1,unit:'scope item',productivity:1,minDuration:1,predecessors:['missing-prerequisite'],crewDemand:1,maxCrews:1,leadTime:0,quantityMode:'manual',sourceElementIds:['removed-task-source']}];source.schedule.activities.push({...source.schedule.activities[0],id:'second-task',name:'Second task',predecessors:[],sourceElementIds:['other-removed-source']});
   provider();render(<InspectorCopilot {...base}/>);sendPrompt();await screen.findByText('House layout preview');
   const comparison=screen.getByRole('region',{name:'Design alternatives'});
   expect(comparison.textContent).toContain('Unavailable until plan review');expect(comparison.textContent).toContain('mapped-cost coverage');expect(comparison.textContent).not.toContain('0 calendar days');
   expect(screen.getByText('Review activities')).toBeTruthy();expect(screen.getByText(/Completion-time change is unavailable/)).toBeTruthy();
+  const alert=screen.getByRole('alert');expect(within(alert).getByText('Construction plan needs review')).toBeTruthy();expect(within(alert).getByRole('list')).toBeTruthy();expect(within(alert).getAllByRole('listitem')).toHaveLength(2);expect(alert.textContent).toContain('removed-task-source');expect(alert.textContent).toContain('other-removed-source');expect(alert.className).toBe('notice warning');expect((screen.getByRole('button',{name:'Accept layout'})as HTMLButtonElement).disabled).toBe(false);
   expect(base.commit).not.toHaveBeenCalled();
  });
 

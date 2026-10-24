@@ -10,6 +10,7 @@ import {createPlanDrawing} from '../model/drawings';
 import {formatDistance} from '../model/geometry';
 import {Modal,Notice,Pill,num,money} from './ui';
 import {PlanningSummary as SitePlanningSummary} from './PlanningPanel';
+import ProposalNotes from './ProposalNotes';
 import './LayoutProposalPreview.css';
 
 type Props={source:Project;preview:Project;proposal:AiProposal;alternatives?:LayoutAlternatives;onSelectAlternative?:(id:string)=>void;disabled:boolean;onAccept:()=>void;onReject:()=>void};
@@ -118,7 +119,7 @@ export default function LayoutProposalPreview({source,preview,proposal,alternati
    <h3>Levels & stair connection</h3><div className="layout-level-list">{levels.map(item=><div key={item.id}><strong>{item.name}</strong><span>{elevation(item,source.units)}</span><Pill tone={newLevels.some(creation=>creation.levelId===item.id)?'green':'neutral'}>{newLevels.some(creation=>creation.levelId===item.id)?'New level':'Existing level'}</Pill></div>)}</div><Stairs stairs={stairs} levels={preview.levels} units={source.units}/>
    {removed.length>0&&<Replacements proposal={proposal} levels={source.levels} units={source.units} expanded reviewRef={replacementDetails} sectionId={replacementDetailsId}/>}
    <h3>All elements to be created</h3><div className="layout-review-table elements" role="region" aria-label="Created elements scroll area" tabIndex={0}><table><caption>Complete proposed creation list</caption><thead><tr><th>Element</th><th>Type</th><th>Floor</th><th>Dimensions · {source.units}</th><th>Position · {source.units}</th><th>Host</th></tr></thead><tbody>{created.map(element=><tr key={element.id}><td><strong>{element.name}</strong><small>{element.id}</small></td><td>{element.kind}</td><td>{preview.levels.find(item=>item.id===element.levelId)?.name||element.levelId}</td><td>{dimensions(element,source.units)}</td><td>{[element.x,element.y,element.z].map(value=>num(value*(source.units==='ft'?3.280839895:1),2)).join(', ')}<small>{num(element.rotation)}° rotation</small></td><td>{element.hostId?preview.elements.find(host=>host.id===element.hostId)?.name||element.hostId:'—'}</td></tr>)}</tbody></table></div>
-   {proposal.issues.length>0&&<><h3>Assumptions to review</h3>{proposal.issues.map((issue,index)=><Notice key={index} warning>{issue}</Notice>)}</>}
+   <ProposalNotes key={proposal.id} notes={proposal.issues}/>
    <p className="layout-preview-caption">Plan, room areas and dimensions are derived from the proposed BIM elements. {removed.length?'Only the listed existing objects are replaced; other model elements are retained.':'Existing project elements remain unchanged.'}</p>
   </div><footer className="layout-review-actions"><button className="button" onClick={reject}><X size={13}/>Reject layout</button><button className="button primary" disabled={disabled} onClick={accept}><Check size={13}/>Accept layout</button></footer></Modal>}
  </div>;
