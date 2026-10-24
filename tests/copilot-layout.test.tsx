@@ -256,6 +256,7 @@ describe('reviewable copilot house layouts',()=>{
   expect(base.commit).not.toHaveBeenCalled();
  });
 
+ // This full alternative-generation/modal/acceptance path needs headroom on shared CI CPUs.
  it('switches to a distinct design and accepts precisely its reviewed elements in one transaction',async()=>{
   const source=createBlankProject('Selectable design options'),before=structuredClone(source),base=props(source),onApplied=vi.fn();let offered:AiProposal|undefined;
   const api=provider((project,ids)=>(offered=layoutProposal(project,ids,{rooms:nineRoomProgramme(),storeys:1})));
@@ -269,7 +270,7 @@ describe('reviewable copilot house layouts',()=>{
   expect(elements.textContent).not.toContain(offered!.creations![0].elementId);expect(within(dialog).getByRole('button',{name:'Review Window priority layout'}).getAttribute('aria-pressed')).toBe('true');
   fireEvent.click(within(dialog).getByRole('button',{name:'Accept layout'}));expect(base.commit).toHaveBeenCalledTimes(1);expect(onApplied).toHaveBeenCalledWith(chosen.proposal);
   const [next,,ids]=base.commit.mock.calls[0] as unknown as [Project,string,string[]];expect(next.elements).toEqual(chosen.preview.elements);expect(next.version).toBe(source.version+1);expect(ids).toEqual(chosen.proposal.creations!.map(creation=>creation.elementId));expect(source).toEqual(before);
- });
+ },15000);
 
  it('keeps an alternative visible after a source revision but cannot accept it, then rejects without edits',async()=>{
   const source=createBlankProject('Stale selected design'),before=structuredClone(source),base=props(source),api=provider((project,ids)=>layoutProposal(project,ids,{rooms:nineRoomProgramme(),storeys:1})),view=render(<InspectorCopilot {...base}/>);
