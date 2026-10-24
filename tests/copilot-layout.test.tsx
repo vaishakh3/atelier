@@ -26,6 +26,7 @@ function provider(make=(project:Project,selectedIds:string[])=>layoutProposal(pr
  const requests:{project:Project;selectedIds:string[];activeLevelId?:string;prompt:string}[]=[];
  const fetch=vi.fn(async(input:string,init?:RequestInit)=>{
   if(input==='/api/usage')return response({ok:true});
+  if(input.includes('/copilot/conversation'))return response({conversation:{projectId:input.split('/')[3],turns:[]}});
   if(input!=='/api/copilot')throw new Error('Unexpected endpoint '+input);
   const body=JSON.parse(String(init?.body));requests.push(body);return response(make(body.project,body.selectedIds));
  });vi.stubGlobal('fetch',fetch);return{requests,fetch};
@@ -116,13 +117,13 @@ describe('reviewable copilot house layouts',()=>{
  it('does not allow Enter to bypass reviewer or unavailable-connection restrictions',()=>{
   const project=createBlankProject('Read only'),api=provider(),base=props(project),view=render(<InspectorCopilot {...base} role="reviewer"/>);
   const input=screen.getByRole('textbox',{name:'Ask the BIM copilot'});fireEvent.change(input,{target:{value:'Create a house'}});fireEvent.keyDown(input,{key:'Enter'});
-  expect((screen.getByRole('button',{name:'Send copilot request'}) as HTMLButtonElement).disabled).toBe(true);expect(api.fetch).not.toHaveBeenCalled();
-  view.rerender(<InspectorCopilot {...base} aiReady={false}/>);fireEvent.keyDown(input,{key:'Enter'});expect(api.fetch).not.toHaveBeenCalled();
+  expect((screen.getByRole('button',{name:'Send copilot request'}) as HTMLButtonElement).disabled).toBe(true);expect(api.fetch.mock.calls.filter(([url])=>url==='/api/copilot')).toHaveLength(0);
+  view.rerender(<InspectorCopilot {...base} aiReady={false}/>);fireEvent.keyDown(input,{key:'Enter'});expect(api.fetch.mock.calls.filter(([url])=>url==='/api/copilot')).toHaveLength(0);
  });
 
  it('cancels a pending pre-request save if the workspace closes',async()=>{
   const project=createBlankProject('Closing workspace'),api=provider(),base=props(project);let release!:()=>void;const gate=new Promise<void>(resolve=>release=resolve),view=render(<InspectorCopilot {...base} beforeRequest={()=>gate}/>);
-  sendPrompt();view.unmount();await act(async()=>{release();await gate;});expect(api.fetch).not.toHaveBeenCalled();
+  sendPrompt();view.unmount();await act(async()=>{release();await gate;});expect(api.fetch.mock.calls.filter(([url])=>url==='/api/copilot')).toHaveLength(0);
  });
 
  it('switches floor plans, dimensions and room schedules consistently in compact and expanded review',()=>{
@@ -268,7 +269,7 @@ describe('reviewable copilot house layouts',()=>{
   fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog'),elements=within(dialog).getByRole('table',{name:'Complete proposed creation list'});
   for(const creation of chosen.proposal.creations!)expect(elements.textContent).toContain(creation.elementId);
   expect(elements.textContent).not.toContain(offered!.creations![0].elementId);expect(within(dialog).getByRole('button',{name:'Review Window priority layout'}).getAttribute('aria-pressed')).toBe('true');
-  fireEvent.click(within(dialog).getByRole('button',{name:'Accept layout'}));expect(base.commit).toHaveBeenCalledTimes(1);expect(onApplied).toHaveBeenCalledWith(chosen.proposal);
+  fireEvent.click(within(dialog).getByRole('button',{name:'Accept layout'}));expect(base.commit).toHaveBeenCalledTimes(1);expect(onApplied).toHaveBeenCalledWith(chosen.proposal);expect(api.fetch.mock.calls.some(([url,init])=>url.split('?')[0].endsWith('/turns/'+offered!.id)&&init?.method==='PATCH')).toBe(true);
   const [next,,ids]=base.commit.mock.calls[0] as unknown as [Project,string,string[]];expect(next.elements).toEqual(chosen.preview.elements);expect(next.version).toBe(source.version+1);expect(ids).toEqual(chosen.proposal.creations!.map(creation=>creation.elementId));expect(source).toEqual(before);
  },15000);
 

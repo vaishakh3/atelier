@@ -13,7 +13,7 @@ const editableFields=new Set(['name','material','typeId','width','depth','height
 const numericFields=new Set(['width','depth','height','x','y','z','rotation']);
 const geometryFields=new Set(['width','depth','height','x','y','z','rotation']);
 const writableProperties=new Set(['classification','status','specification','fireRating']);
-const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','layout','creations','levelCreations','removals']);
+const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','layout','creations','levelCreations','removals','roomResize']);
 const unsafeKeys=new Set(['__proto__','prototype','constructor']);
 const own=(object:object,key:string)=>Object.prototype.hasOwnProperty.call(object,key);
 function plain(value:unknown):value is Record<string,unknown> {
@@ -87,11 +87,16 @@ export function applyProposal(project:Project,proposal:AiProposal):Project {
   const metadataLimits={id:160,prompt:4000,summary:1500,model:121,createdAt:100};
   for(const key of ['id','prompt','summary','model','createdAt']as const)if(typeof proposal[key]!=='string'||proposal[key].length>metadataLimits[key])throw new Error('The proposal metadata is invalid.');
   if(!['edit','analysis','schedule','repetition','layout'].includes(proposal.kind)||!Array.isArray(proposal.changes)||proposal.changes.length>1000||!Array.isArray(proposal.selectedIds)||proposal.selectedIds.length>10000||proposal.selectedIds.some(id=>typeof id!=='string')||!Array.isArray(proposal.issues)||proposal.issues.length>500||proposal.issues.some(issue=>typeof issue!=='string'))throw new Error('The proposal shape is invalid.');
+  if(own(proposal,'roomResize')){
+    const resize=proposal.roomResize;
+    if(proposal.kind!=='layout'||!plain(resize)||Object.keys(resize).length!==4||Object.keys(resize).some(key=>!['roomKey','roomName','sourceArea','targetArea'].includes(key))||typeof resize.roomKey!=='string'||!/^[A-Za-z0-9_-]{1,40}$/.test(resize.roomKey)||typeof resize.roomName!=='string'||!resize.roomName.trim()||resize.roomName.length>3000||[resize.sourceArea,resize.targetArea].some(area=>typeof area!=='number'||!Number.isFinite(area)||area<=0||area>1e6))throw new Error('The room resize context is invalid.');
+  }
   if(proposal.kind==='layout'){
     if(proposal.changes.length||own(proposal,'crewCount')||own(proposal,'repetition'))throw new Error('Create a layout separately from model edits, repetition and crew changes.');
     const parsed=layoutProposalSchema.safeParse(proposal.layout);
     if(!parsed.success||parsed.data.idPrefix!==proposal.id)throw new Error('The layout specification is invalid.');
     const layout=parsed.data;
+    if(proposal.roomResize&&!layout.rooms.some(room=>room.key===proposal.roomResize!.roomKey&&room.area!==null&&Math.abs(room.area-proposal.roomResize!.targetArea)<1e-6))throw new Error('The room resize context does not match the reviewed layout.');
     if(layout.baselineVersion!==project.version)throw new Error('The project changed after this layout preview. Generate a new proposal.');
     if(layout.footprintId?proposal.selectedIds.length!==1||proposal.selectedIds[0]!==layout.footprintId:proposal.selectedIds.length!==0)throw new Error('A layout requires an empty selection or exactly its selected slab footprint.');
     const selectedSlab=project.elements.find(element=>element.id===layout.footprintId);

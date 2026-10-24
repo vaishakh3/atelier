@@ -157,3 +157,117 @@ describe('two-storey and replan provider contract',()=>{
   const accepted=applyProposal(project,replan);expect(accepted.levels).toHaveLength(2);expect(accepted.elements.filter(element=>element.kind==='room'&&houseProgram.rooms.some(room=>room.key===element.properties.layoutKey))).toHaveLength(8);
  });
 });
+
+describe('bounded conversational design context',()=>{
+ const turn=(proposal:ReturnType<typeof buildProposal>,status:'proposed'|'analysis'|'applied'|'rejected'|'superseded'='proposed')=>({id:proposal.id,prompt:proposal.prompt,summary:proposal.summary,issues:proposal.issues,kind:proposal.kind,selectedIds:proposal.selectedIds,status,projectVersion:proposal.layout?.baselineVersion??1,createdAt:proposal.createdAt,...(proposal.layout?{layout:proposal.layout}:{})});
+ it('carries the complete unapplied programme through short follow-ups against the unchanged live base',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');
+  const project=createBlankProject('Conversational house'),program={...houseProgram,storeys:2 as const,floorHeight:3.2,rooms:[...houseProgram.rooms,{key:'kitchen',name:'Kitchen',use:'kitchen' as const,area:12,attachedTo:null}]},pending=buildProposal(layoutOutput(program),{project,selectedIds:[],prompt:'Two floors, two bedrooms with ensuites, a common bathroom, living, home theater, pool and kitchen.'},DEFAULT_AI_MODEL),before=structuredClone(project);
+  const clarification={...turn(pending),id:'clarification',prompt:'Make kitchen bigger',summary:'What net kitchen area would you prefer?',issues:[],kind:'analysis' as const,status:'analysis' as const,layout:undefined};
+  for(const prompt of ['make kitchen bigger','keep 2 floors','yes','18 m²']){
+   const revised={...program,storeys:null,floorHeight:null,rooms:program.rooms.map(room=>room.key==='kitchen'?{...room,area:18}:room)};provider.response={status:'completed',output_parsed:layoutOutput(revised)};
+   const proposal=await requestProposal({project,selectedIds:[],prompt,conversation:[turn(pending),clarification],pendingProposal:pending}),sent=JSON.parse(String(provider.requests.at(-1)!.input));
+   expect(sent.pendingLayoutIntent).toMatchObject({id:pending.id,status:'unapplied',baseProjectVersion:project.version,draftElementIdsAreNotLive:true,layout:{storeys:2,rooms:program.rooms}});expect(sent.pendingLayoutIntent).not.toHaveProperty('creations');
+   expect(sent.conversation[1].messages).toEqual([{role:'user',content:'Make kitchen bigger'},{role:'assistant',content:JSON.stringify({summary:clarification.summary,issues:[]})}]);expect(proposal.layout).toMatchObject({baselineVersion:project.version,levelId:'level-0',storeys:2,floorHeight:3.2});
+   expect(proposal.layout!.rooms).toHaveLength(program.rooms.length);expect(proposal.layout!.rooms.find(room=>room.key==='bath-1')?.attachedTo).toBe('bed-1');expect(proposal.layout!.rooms.find(room=>room.key==='kitchen')?.area).toBe(18);expect(proposal.creations!.every(creation=>!pending.creations!.some(old=>old.elementId===creation.elementId))).toBe(true);expect(project).toEqual(before);
+  }
+  const instructions=String(provider.requests[0].instructions);expect(instructions).toContain('at most ONE genuinely blocking question');expect(instructions).toContain('latest user request overrides');expect(instructions).toContain('never use them in set-property');expect(instructions).toContain('An analysis/clarification turn does not discard');
+ });
+ it('bounds history with explicit statuses and never presents rejected/superseded drafts as applied',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');provider.response={status:'completed',output_parsed:{summary:'Analysis',operations:[],issues:[]}};
+  const project=createBlankProject('Status context'),pending=buildProposal(layoutOutput(),{project,selectedIds:[],prompt:'Initial programme'},DEFAULT_AI_MODEL),history=Array.from({length:15},(_,index)=>({...turn(pending,index===14?'rejected':'superseded'),id:index===14?pending.id:`history-${index}`,prompt:`Prompt ${index}`}));
+  await requestProposal({project,selectedIds:[],prompt:'Explain current state',conversation:history,pendingProposal:pending});const sent=JSON.parse(String(provider.requests[0].input));expect(sent.conversation).toHaveLength(12);expect(sent.conversation[0].messages[0].content).toBe('Prompt 3');expect(sent.conversation.at(-1).status).toBe('rejected');expect(sent.pendingLayoutIntent).toBeNull();expect(project.elements).toEqual([]);expect(provider.requests[0].store).toBe(false);
+ });
+ it('honours a latest explicit storey change instead of forcing the previous pending two-storey option',()=>{
+  const project=createBlankProject('Changed brief'),pending=buildProposal(layoutOutput({...houseProgram,storeys:2}),{project,selectedIds:[],prompt:'Two storeys'},DEFAULT_AI_MODEL),revised=buildProposal(layoutOutput({...houseProgram,storeys:1}),{project,selectedIds:[],prompt:'Actually one storey',pendingProposal:pending,conversation:[turn(pending)]},DEFAULT_AI_MODEL);expect(revised.layout!.storeys).toBe(1);expect(revised.levelCreations).toEqual([]);
+ });
+ it('does not edit pending-only room IDs as though the preview was already applied',()=>{
+  const project=createBlankProject('Unapplied room'),pending=buildProposal(layoutOutput(),{project,selectedIds:[],prompt:'House'},DEFAULT_AI_MODEL),draftRoom=pending.creations!.find(creation=>creation.after.kind==='room')!,output=aiOutputSchema.parse({summary:'Wrong edit',issues:[],operations:[{action:'set-property',elementIds:[draftRoom.elementId],property:'width',value:null,numericValue:5,typeId:null,crewCount:null,count:null,offsetX:null,offsetY:null}]});
+  expect(()=>buildProposal(output,{project,selectedIds:[],prompt:'make it bigger',pendingProposal:pending,conversation:[turn(pending)]},DEFAULT_AI_MODEL)).toThrow(/Select the elements/);expect(project.elements).toEqual([]);
+ });
+});
+
+describe('explicit live edit scope without manual selection',()=>{
+ const edit=(elementIds:string[],property='specification',value='Reviewed option')=>aiOutputSchema.parse({summary:'Scoped edit',issues:[],operations:[{action:'set-property',elementIds,property,value,numericValue:null,typeId:null,crewCount:null,count:null,offsetX:null,offsetY:null}]});
+ const replacement=(elementIds:string[])=>aiOutputSchema.parse({summary:'Window upgrade',issues:[],operations:[{action:'replace-type',elementIds,property:null,value:null,numericValue:null,typeId:'window-thermal',crewCount:null,count:null,offsetX:null,offsetY:null}]});
+ it('resolves a uniquely named live element and explicit all-windows while reviewing the exact used IDs',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');const project=createDemoProject(),window=project.elements.find(element=>element.kind==='window')!,windows=project.elements.filter(element=>element.kind==='window').map(element=>element.id),before=structuredClone(project);
+  provider.response={status:'completed',output_parsed:replacement([window.id])};let proposal=await requestProposal({project,selectedIds:[],prompt:`Upgrade ${window.name}`});expect(proposal.selectedIds).toEqual([window.id]);expect(JSON.parse(String(provider.requests[0].input)).resolvedEditScopeIds).toEqual([window.id]);
+  proposal=buildProposal(replacement(windows),{project,selectedIds:[],prompt:'Upgrade all windows'},DEFAULT_AI_MODEL);expect(proposal.selectedIds).toEqual(windows);expect(proposal.changes).toHaveLength(windows.length);
+  proposal=buildProposal(replacement([windows[0]]),{project,selectedIds:windows,prompt:'Upgrade selected windows'},DEFAULT_AI_MODEL);expect(proposal.selectedIds).toEqual([windows[0]]);expect(project).toEqual(before);
+ });
+ it('respects exact named floor qualifiers and declines unresolved spatial subsets instead of widening them',()=>{
+  const project=createDemoProject(),ground=project.elements.filter(element=>element.kind==='window'&&element.levelId==='level-0').map(element=>element.id),upper=project.elements.find(element=>element.kind==='window'&&element.levelId==='level-1')!;
+  expect(buildProposal(replacement(ground),{project,selectedIds:[],prompt:'Upgrade all windows on Ground floor'},DEFAULT_AI_MODEL).selectedIds).toEqual(ground);
+  expect(()=>buildProposal(replacement([upper.id]),{project,selectedIds:[],prompt:'Upgrade all windows on Ground floor'},DEFAULT_AI_MODEL)).toThrow(/outside.*scope/);
+  for(const prompt of ['Upgrade all windows in Kitchen','Upgrade all windows facing south','Upgrade all windows upstairs'])expect(()=>buildProposal(replacement(ground),{project,selectedIds:[],prompt},DEFAULT_AI_MODEL)).toThrow(/Select the elements/);
+ });
+ it('rejects duplicated names, exclusions, old-history target guesses and output outside actual selection',()=>{
+  const project=createDemoProject(),windows=project.elements.filter(element=>element.kind==='window'),first=windows[0],second=windows[1];first.name='Kitchen window';second.name='Kitchen window';
+  expect(()=>buildProposal(replacement([first.id]),{project,selectedIds:[],prompt:'Upgrade Kitchen window'},DEFAULT_AI_MODEL)).toThrow(/Select the elements/);
+  expect(()=>buildProposal(replacement([first.id]),{project,selectedIds:[],prompt:'Upgrade all windows except the kitchen'},DEFAULT_AI_MODEL)).toThrow(/Select the elements/);
+  const prior={id:'old',prompt:'Upgrade prior window',summary:'Window option',issues:[],kind:'edit' as const,selectedIds:[first.id],status:'applied' as const,projectVersion:1,createdAt:new Date().toISOString()};
+  expect(()=>buildProposal(replacement([first.id]),{project,selectedIds:[],prompt:'Upgrade another window',conversation:[prior]},DEFAULT_AI_MODEL)).toThrow(/Select the elements/);
+  expect(()=>buildProposal(replacement([second.id]),{project,selectedIds:[first.id],prompt:`Upgrade ${second.name}`},DEFAULT_AI_MODEL)).toThrow(/outside.*scope/);
+ });
+ it('reuses only live prior IDs for a referential continuation and still enforces locks',()=>{
+  const project=createDemoProject(),window=project.elements.find(element=>element.kind==='window')!,prior=buildProposal(edit([window.id]),{project,selectedIds:[window.id],prompt:'Set specification'},DEFAULT_AI_MODEL),turn={id:prior.id,prompt:prior.prompt,summary:prior.summary,issues:[],kind:prior.kind,selectedIds:prior.selectedIds,status:'proposed' as const,projectVersion:project.version,createdAt:prior.createdAt};
+  expect(buildProposal(edit([window.id]),{project,selectedIds:[],prompt:'Change that specification',pendingProposal:prior,conversation:[turn]},DEFAULT_AI_MODEL).selectedIds).toEqual([window.id]);
+  project.constraints.lockedElementIds=[window.id];expect(()=>buildProposal(edit([window.id]),{project,selectedIds:[],prompt:'Change that specification',pendingProposal:prior,conversation:[turn]},DEFAULT_AI_MODEL)).toThrow(/locked/);
+  project.constraints.lockedElementIds=[];expect(()=>buildProposal(edit([window.id]),{project,selectedIds:[],prompt:'Change that specification',conversation:[{...turn,status:'rejected'}]},DEFAULT_AI_MODEL)).toThrow(/Select the elements/);
+ });
+ it('requires a coordinated replacement for generated room geometry rather than a disconnected semantic rectangle edit',()=>{
+  const project=createBlankProject('Applied generated house'),first=buildProposal(layoutOutput({...houseProgram,storeys:2}),{project,selectedIds:[],prompt:'Create house'},DEFAULT_AI_MODEL),live=applyProposal(project,first),room=live.elements.find(element=>element.kind==='room'&&element.properties.layoutKey==='living')!,output=aiOutputSchema.parse({summary:'Incorrect rectangle-only edit',issues:[],operations:[{action:'set-property',elementIds:[room.id],property:'width',value:null,numericValue:room.width+1,typeId:null,crewCount:null,count:null,offsetX:null,offsetY:null}]});
+  expect(()=>buildProposal(output,{project:live,selectedIds:[room.id],prompt:'Make living room bigger'},DEFAULT_AI_MODEL)).toThrow(/coordinated create-layout replacement/);
+  const before=structuredClone(live),replan=buildProposal(layoutOutput({...houseProgram,storeys:null,replaceConcept:true}),{project:live,selectedIds:[room.id],prompt:'Make living room bigger'},DEFAULT_AI_MODEL);expect(replan.layout).toMatchObject({footprintId:null,levelId:'level-0',storeys:2,replaceConcept:true});expect(replan.selectedIds).toEqual([]);expect(replan.removals!.some(removal=>removal.elementId===room.id)).toBe(true);expect(replan.issues.join(' ')).toContain('complete native generated scope');expect(live).toEqual(before);
+  live.constraints.lockedElementIds=[room.id];expect(()=>buildProposal(layoutOutput({...houseProgram,replaceConcept:true}),{project:live,selectedIds:[room.id],prompt:'Replan house'},DEFAULT_AI_MODEL)).toThrow(/locked/);
+ });
+ it('uses selected generation to disambiguate two houses while rejecting mixed or manual context selections',()=>{
+  const blank=createBlankProject('Two concept groups'),first=buildProposal(layoutOutput(),{project:blank,selectedIds:[],prompt:'Create house'},DEFAULT_AI_MODEL),project=applyProposal(blank,first),room=project.elements.find(element=>element.kind==='room'&&element.properties.layoutKey==='living')!,other={...structuredClone(room),id:'other-house-room-living',x:100,properties:{...room.properties,conceptGeneration:'other-house'}};project.elements.push(other);
+  const proposal=buildProposal(layoutOutput({...houseProgram,replaceConcept:true}),{project,selectedIds:[room.id],prompt:'Replan this house'},DEFAULT_AI_MODEL);expect(proposal.removals!.some(removal=>removal.elementId===other.id)).toBe(false);expect(proposal.removals!.some(removal=>removal.elementId===room.id)).toBe(true);
+  expect(()=>buildProposal(layoutOutput({...houseProgram,replaceConcept:true}),{project,selectedIds:[room.id,other.id],prompt:'Replan house'},DEFAULT_AI_MODEL)).toThrow(/More than one concept|Select one editable/);
+  room.properties={};expect(()=>buildProposal(layoutOutput({...houseProgram,replaceConcept:true}),{project,selectedIds:[room.id],prompt:'Replan house'},DEFAULT_AI_MODEL)).toThrow(/More than one concept|Select one editable/);
+ });
+});
+
+describe('instant selected generated room resizing',()=>{
+ const fixture=()=>{
+  const blank=createBlankProject('Five-bedroom house'),rooms:LayoutSpec['rooms']=Array.from({length:5},(_,index)=>[{key:`bed-${index+1}`,name:`Bedroom ${index+1}`,use:'bedroom' as const,area:14,attachedTo:null,floor:1 as const},{key:`ensuite-${index+1}`,name:`Ensuite ${index+1}`,use:'bathroom' as const,area:4.5,attachedTo:`bed-${index+1}`,floor:1 as const}]).flat();rooms.push({key:'living',name:'Living room',use:'living',area:20,attachedTo:null,floor:0},{key:'kitchen',name:'Kitchen',use:'kitchen',area:10,attachedTo:null,floor:0});
+  const first=buildProposal(layoutOutput({...houseProgram,storeys:2,floorHeight:3.8,rooms}),{project:blank,selectedIds:[],prompt:'Create five-bedroom house with attached bathrooms and two storeys at 3.8 m'},DEFAULT_AI_MODEL),project=applyProposal(blank,first),room=project.elements.find(element=>element.kind==='room'&&element.properties.layoutKey==='bed-5')!;
+  return{project,room,rooms};
+ };
+ const history=(proposal:ReturnType<typeof buildProposal>,status:'proposed'|'applied')=>({id:proposal.id,prompt:proposal.prompt,summary:proposal.summary,issues:proposal.issues,kind:proposal.kind,selectedIds:proposal.selectedIds,status,projectVersion:proposal.layout!.baselineVersion,createdAt:proposal.createdAt,layout:proposal.layout,roomResize:proposal.roomResize});
+ it('answers the exact selected Bedroom 5 bigger request instantly using +20% actual area and complete coordinated geometry',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','');const {project,room,rooms}=fixture(),before=structuredClone(project),actual=room.width*room.depth;room.properties.requestedArea=1;before.elements.find(element=>element.id===room.id)!.properties.requestedArea=1;
+  const proposal=await requestProposal({project,selectedIds:[room.id],prompt:'make the selected bedroom 5 bigger'}),target=Math.ceil(actual*1.2*1000)/1000,newRoom=proposal.creations!.find(item=>item.after.kind==='room'&&item.after.properties.layoutKey==='bed-5')!.after;
+  expect(provider.calls).toBe(0);expect(proposal.model).toBe('Atelier planning engine');expect(proposal.kind).toBe('layout');expect(proposal.layout).toMatchObject({replaceConcept:true,storeys:2,floorHeight:3.8});expect(proposal.layout!.rooms).toHaveLength(rooms.length);expect(proposal.layout!.rooms.find(item=>item.key==='ensuite-5')?.attachedTo).toBe('bed-5');expect(proposal.layout!.rooms.find(item=>item.key==='bed-5')?.area).toBe(target);expect(proposal.roomResize).toEqual({roomKey:'bed-5',roomName:'Bedroom 5',sourceArea:actual,targetArea:target});
+  expect(newRoom.width*newRoom.depth).toBeGreaterThan(actual);expect(proposal.removals!.some(item=>item.before.kind==='wall')).toBe(true);expect(proposal.creations!.some(item=>item.after.kind==='wall')).toBe(true);expect(proposal.issues.join(' ')).toContain('Assumption: Bedroom 5 +20% of its actual measured area');expect(project).toEqual(before);
+  const accepted=applyProposal(project,proposal);expect(accepted.levels).toEqual(project.levels);expect(accepted.levels[1].elevation).toBeCloseTo(3.8);
+ });
+ it('uses polygon area for the resize reference and retains current house programme',async()=>{
+  const {project,room}=fixture();room.footprint=[{x:0,y:0},{x:room.width,y:0},{x:0,y:room.depth}];const actual=room.width*room.depth/2,proposal=await requestProposal({project,selectedIds:[room.id],prompt:'Make Bedroom 5 more spacious'});expect(proposal.roomResize!.sourceArea).toBeCloseTo(actual);expect(proposal.roomResize!.targetArea).toBe(Math.ceil(actual*1.2*1000)/1000);expect(provider.calls).toBe(0);
+ });
+ it('corrects only 10% from the original reference before and after acceptance without compounding the pending target',async()=>{
+  const {project,room}=fixture(),initial=await requestProposal({project,selectedIds:[room.id],prompt:'Make Bedroom 5 bigger'}),source=initial.roomResize!.sourceArea,target=Math.ceil(source*1.1*1000)/1000;
+  const pending=await requestProposal({project,selectedIds:[room.id],prompt:'only 10% instead',pendingProposal:initial,conversation:[history(initial,'proposed')]});expect(pending.roomResize).toMatchObject({sourceArea:source,targetArea:target});
+  const accepted=applyProposal(project,initial),corrected=await requestProposal({project:accepted,selectedIds:[],prompt:'actually 10%',conversation:[history(initial,'applied')]});expect(corrected.roomResize).toMatchObject({sourceArea:source,targetArea:target});expect(provider.calls).toBe(0);
+  const current=accepted.elements.find(element=>element.kind==='room'&&element.properties.layoutKey==='bed-5')!,fresh=await requestProposal({project:accepted,selectedIds:[current.id],prompt:'make it 10% bigger',conversation:[history(initial,'applied')]});expect(fresh.roomResize!.sourceArea).toBeCloseTo(current.width*current.depth);expect(fresh.roomResize!.targetArea).toBe(Math.ceil(current.width*current.depth*1.1*1000)/1000);
+ });
+ it('carries an explicit 18 m² correction through the provider with the original resize reference',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');const {project,room}=fixture(),initial=await requestProposal({project,selectedIds:[room.id],prompt:'Make Bedroom 5 bigger'}),{idPrefix:_,baselineVersion:__,...spec}=initial.layout!;
+  provider.response={status:'completed',output_parsed:layoutOutput({...spec,width:null,depth:null,rooms:spec.rooms.map(item=>item.key==='bed-5'?{...item,area:18}:item)})};
+  const revised=await requestProposal({project,selectedIds:[room.id],prompt:'18 m²',pendingProposal:initial,conversation:[history(initial,'proposed')]});expect(revised.roomResize).toMatchObject({roomKey:'bed-5',sourceArea:initial.roomResize!.sourceArea,targetArea:18});expect(revised.layout!.rooms).toHaveLength(initial.layout!.rooms.length);expect(provider.calls).toBe(1);expect(JSON.parse(String(provider.requests[0].input)).pendingLayoutIntent.roomResize).toEqual(initial.roomResize);
+ });
+ it('does not transfer percentage correction provenance to another house with the same room key or through an unrelated mutation',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');const {project,room}=fixture(),initial=await requestProposal({project,selectedIds:[room.id],prompt:'Make Bedroom 5 bigger'}),accepted=applyProposal(project,initial),other=fixture().project,levelMap=new Map(other.levels.map((level,index)=>[level.id,index?'other-upper':'other-base']));
+  accepted.levels.push(...other.levels.map(level=>({...level,id:levelMap.get(level.id)!,elevation:level.elevation+20})));accepted.elements.push(...other.elements.map(element=>({...element,levelId:levelMap.get(element.levelId)!,x:element.x+100,z:element.z+20,properties:{...element.properties,layoutBaseLevelId:'other-base'}})));
+  provider.response={status:'completed',output_parsed:{summary:'Confirm the intended house',operations:[],issues:[]}};
+  const switched=await requestProposal({project:accepted,selectedIds:[],activeLevelId:'other-base',prompt:'only 10% instead',conversation:[history(initial,'applied')]});expect(switched.kind).toBe('analysis');expect(switched.roomResize).toBeUndefined();expect(provider.calls).toBe(1);
+  const unrelated={id:'new-topic',prompt:'Change a window specification',summary:'Window option',kind:'edit' as const,status:'applied' as const,selectedIds:[],issues:[],projectVersion:accepted.version,createdAt:initial.createdAt};
+  const next=await requestProposal({project:accepted,selectedIds:[],activeLevelId:'level-0',prompt:'only 10% instead',conversation:[history(initial,'applied'),unrelated]});expect(next.kind).toBe('analysis');expect(next.roomResize).toBeUndefined();expect(provider.calls).toBe(2);
+ });
+ it('blocks locked-room defaults and leaves compound requests to the conversational provider',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');const {project,room}=fixture();project.constraints.lockedElementIds=[room.id];await expect(requestProposal({project,selectedIds:[room.id],prompt:'Make Bedroom 5 bigger'})).rejects.toMatchObject({status:422,code:'AI_PROPOSAL_INVALID'});expect(provider.calls).toBe(0);
+  project.constraints.lockedElementIds=[];provider.response={status:'completed',output_parsed:{summary:'Review combined request',operations:[],issues:[]}};await requestProposal({project,selectedIds:[room.id],prompt:'Make Bedroom 5 bigger and move the kitchen next to the pool'});expect(provider.calls).toBe(1);
+ });
+});

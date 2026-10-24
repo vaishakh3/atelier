@@ -33,6 +33,17 @@ describe('reviewed new-layout transactions',()=>{
     expect(project).toEqual(original);
   });
 
+  it('retains bounded resize provenance without bypassing reviewed geometry validation',()=>{
+    const project=createBlankProject('Resize context'),rooms=layout(project).rooms.map(room=>room.key==='bedroom'?{...room,area:18}:room),p=proposal(project,null,{rooms});
+    p.roomResize={roomKey:'bedroom',roomName:'Bedroom',sourceArea:15,targetArea:18};
+    expect(applyProposal(project,p).elements).toHaveLength(p.creations!.length);
+    for(const roomResize of [{...p.roomResize,targetArea:19},{...p.roomResize,sourceArea:NaN},{...p.roomResize,sourceArea:0},{...p.roomResize,roomKey:'missing'},{...p.roomResize,hidden:true}])expect(()=>applyProposal(project,{...p,roomResize})).toThrow(/resize context/i);
+    expect(()=>applyProposal(project,{...p,kind:'analysis'})).toThrow(/resize context/i);
+    const changed=structuredClone(p);changed.creations![0].after.width+=1;
+    expect(()=>applyProposal(project,changed)).toThrow(/diff/i);
+    expect(project.elements).toEqual([]);
+  });
+
   it('retains a selected slab and rejects footprint edits made after preview',()=>{
     const project=createBlankProject('Slab house');project.elements=[{id:'footprint',kind:'slab',name:'Selected boundary',levelId:project.levels[0].id,typeId:'slab-concrete',material:'Reinforced concrete',x:5,y:8,z:-.18,width:16,depth:20,height:.18,rotation:30,editable:true,properties:{}}];
     const original=structuredClone(project),p=proposal(project,'footprint'),next=applyProposal(project,p);

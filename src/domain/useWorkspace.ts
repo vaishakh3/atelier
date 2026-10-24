@@ -72,11 +72,11 @@ export function useWorkspace({identityRequired=false,userId,authenticated=true}:
  },[project,ready,save,identityRequired,authenticated,currentRole,recoveryCopy]);
  useEffect(()=>{if(!ready||!authenticated)return;let live=true;setVersions([]);setComments([]);Promise.all([apiFetch('/api/projects/'+project.id+'/versions').then(r=>r.ok?r.json():{versions:[]}),apiFetch('/api/projects/'+project.id+'/comments').then(r=>r.ok?r.json():{comments:[]})]).then(([v,c])=>{if(live){setVersions(v.versions||[]);setComments(c.comments||[]);}}).catch(()=>{});return()=>{live=false;};},[project.id,ready,authenticated,historyEpoch]);
  const commit=useCallback((next:Project|((p:Project)=>Project),action:string,ids:string[]=[])=>{
-  if(!writable.current)return;
+  if(!writable.current)return false;
   const previous=active.current,result=invalidateScheduleReview(previous,typeof next==='function'?next(previous):next),parsed=projectSchema.safeParse(result);
-  if(!parsed.success){setError('The proposed project state is invalid. No changes were applied.');return;}
+  if(!parsed.success){setError('The proposed project state is invalid. No changes were applied.');return false;}
   undo.current.push(structuredClone(previous));undo.current=undo.current.slice(-60);redo.current=[];
-  const value=auditProject({...result,version:previous.version,audit:previous.audit},action,ids,actor.current);active.current=value;setProject(value);setTick(x=>x+1);
+  const value=auditProject({...result,version:previous.version,audit:previous.audit},action,ids,actor.current);active.current=value;setProject(value);setTick(x=>x+1);return true;
  },[]);
  const historyAction=(direction:'undo'|'redo')=>{if(!writable.current)return;const source=direction==='undo'?undo:redo,destination=direction==='undo'?redo:undo;const next=source.current.pop();if(!next)return;const now=active.current;destination.current.push(structuredClone(now));const value=auditProject({...next,version:now.version,audit:now.audit},direction==='undo'?'Undo transaction':'Redo transaction',[],actor.current);active.current=value;setProject(value);setTick(x=>x+1);};
  const undoAction=()=>{if(writable.current&&undo.current.length)recordUsage('undo',active.current.id);historyAction('undo');},redoAction=()=>historyAction('redo');
