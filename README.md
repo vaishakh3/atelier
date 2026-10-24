@@ -1,8 +1,33 @@
 # Atelier
 
+AIBoomi Startup Weekend prototype · AI-assisted architectural design and construction planning.
+
 A standalone desktop BIM copilot for architects and planners. Atelier connects a bounded architectural model to reviewable AI transactions, coordinated schedules, explicit estimates and construction cost–time comparisons. The architect remains in control of every model change.
 
+Architects often have to reconcile design revisions, quantity estimates and construction plans across separate tools. Atelier brings these decisions into one workspace: propose a layout, inspect its BIM elements, revise a specification and see how the represented cost and construction programme change before committing.
+
 The desktop application embeds its own service and runs without Node.js or a separate browser. Model editing, measurements, costing, scheduling, revisions and exports work offline. Only requested copilot operations require an OpenAI connection.
+
+## Product demo
+
+**[Watch the 80-second product demo on Google Drive](https://drive.google.com/file/d/1F28LAAUgV0ebSu1uPgbMvA1y3s3sKpeQ/view)** — publicly viewable; no sign-in required.
+
+The edited walkthrough uses actual prototype screens from one connected project: prompt for a two-storey house → review floor plans and accept the BIM model → upgrade selected windows with a calculated cost impact → inspect the estimate → review construction scope and schedule → test a procurement delay → compare alternatives and a tighter budget → configure site checks. Rates, allowances and planning assumptions are illustrative; the prototype does not certify engineering or legal compliance.
+
+## Idea and technology
+
+The core idea is an architect-controlled copilot: AI proposes structured changes, while project engines validate supported geometry and calculate quantities, known costs and construction timing. Proposals show their affected elements and assumptions, and acceptance creates an undoable transaction. Design alternatives, site references and optional residential services coordination extend the same model.
+
+| Area | Technology / tools |
+|---|---|
+| Desktop application | Electron, with an embedded local service and OS-protected credentials |
+| Interface | React 19, TypeScript, Vite and Lucide icons |
+| Model and views | Three.js, React Three Fiber / Drei, SVG plan/section/elevation views |
+| AI copilot | OpenAI Responses API and OpenAI SDK; default model `gpt-6.1-sol` |
+| Project engines | TypeScript geometry, quantity take-off, cost estimation, resource-constrained scheduling and bounded scenario comparison; Web Workers for scenario and sun calculations |
+| Local API and storage | Node.js, Express 5, Zod validation and authenticated AES-256-GCM storage |
+| Interoperability and reports | Bounded IFC/OBJ/DXF exchange, project JSON, jsPDF and SheetJS exports |
+| Verification and delivery | Vitest, Testing Library and GitHub Actions with packages for macOS, Windows and Linux |
 
 ## Run and build
 
@@ -96,7 +121,7 @@ IFC editing requires supported horizontal rectangular profiles or simple, explic
 
 See [PRD acceptance mapping](docs/PRD_ACCEPTANCE.md), [validation evidence](docs/VALIDATION.md), [third-party provenance](docs/THIRD_PARTY.md) and [release operations](desktop/RELEASE.md). Automated verification covers geometry, costs, calendars, scenarios, IFC exchange, atomic AI changes, identity, permissions, concurrency, encryption, recovery, immutable reviews and desktop isolation. CI also scans dependencies and inspects packaged ASAR contents and preserved license notices.
 
-Atelier remains a release candidate for controlled technical evaluation. The 0.6.0 macOS services demonstration completed its connected edit/estimate/scope-review workflow and full app restart in an isolated QA profile; the 0.6.1 controls passed 494 automated tests and browser checks. The installed 0.6.1 app passed its packaged smoke checks after macOS authorization and reopened successfully; future changed-build prompt continuity remains unproven. See the version-specific evidence. Site checks are partial geometric prechecks, not legal certification, permit approval or proof of current-law completeness. Coverage/FAR/height measurements use disclosed model proxies; zoning, road/building lines, statutory exemptions, fire/egress, accessibility, structure, services and environmental restrictions still need professional review. Vaastu is an optional client preference, separate from statutory rules.
+Atelier remains a release candidate for controlled technical evaluation. Version 0.7.0 passed 576 tests across 59 files, TypeScript checks, the production build and all four platform package jobs in CI. The local macOS package passed 17 isolated packaged smoke checks; the connected design/cost/schedule demo and Design studio walkthrough were exercised in the browser. Packaging is separate from native acceptance on every platform, and future changed-build Keychain prompt continuity remains unproven. See the version-specific evidence. Site checks are partial geometric prechecks, not legal certification, permit approval or proof of current-law completeness. Coverage/FAR/height measurements use disclosed model proxies; zoning, road/building lines, statutory exemptions, fire/egress, accessibility, structure, services and environmental restrictions still need professional review. Vaastu is an optional client preference, separate from statutory rules.
 
 Public distribution still requires publisher signing/notarization credentials, native acceptance on each supported platform, independent professional quantity/schedule checks and the PRD's 3–5 firm pilot. Those external acceptance gates cannot be established by unit tests or local packaging. Automatic updates remain disabled unless the publisher configures a signed trusted feed and matching release identity.
 
