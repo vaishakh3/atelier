@@ -31,7 +31,7 @@ This user-authorized extension adds concept electrical/plumbing coordination to 
 
 ## Familiar model workflow — 0.6.1
 
-Quick access (Q / Cmd/Ctrl+K), command and model search, camera presets, fit-all/selection, visible-element selection, temporary hide/isolate/show-all, drawing-tool repetition and guarded keyboard shortcuts are implemented. The existing central canvas, project browser, contextual inspector and coordinated plan/section/elevation workflow remain. [VALIDATION.md](VALIDATION.md) distinguishes browser/automated evidence from the installed-app Keychain gate. This does not establish all Forma capabilities, zero learning effort or a measured switching advantage; terrain/context data, native proprietary-format editing, saved-view/proposal parity and environmental simulation remain separate gaps.
+Quick access (Q / Cmd/Ctrl+K), command and model search, camera presets, fit-all/selection, visible-element selection, temporary hide/isolate/show-all, drawing-tool repetition and guarded keyboard shortcuts are implemented. The existing central canvas, project browser, contextual inspector and coordinated plan/section/elevation workflow remain. [VALIDATION.md](VALIDATION.md) distinguishes browser/automated controls evidence from the installed smoke/relaunch checks and future-update Keychain limitation. This does not establish all Forma capabilities, zero learning effort or a measured switching advantage; terrain/context data, native proprietary-format editing, saved-view/proposal parity and environmental simulation remain separate gaps.
 
 ## Functional requirements
 
