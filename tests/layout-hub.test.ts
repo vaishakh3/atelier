@@ -107,6 +107,57 @@ describe('compact residential hub and honest gallery fallback', () => {
         checkPhysicalAccess(result);
     });
 
+    it('keeps a standard twelve-room house radial by attaching only its requested pantry to the kitchen', () => {
+        const rooms = [room('living', 'living'), room('dining', 'dining'), room('kitchen', 'kitchen'), room('laundry', 'utility'), room('pantry', 'utility'), room('ground-bath', 'bathroom'), room('upper-bath', 'bathroom'), ...[1, 2, 3, 4].map(n => room(`bed${n}`, 'bedroom')), room('ensuite', 'bathroom', 'bed1')].map(r => ({ ...r, floor: null }));
+        const project = createBlankProject('Twelve requested rooms'), before = structuredClone(project), result = previewLayout(project, request(rooms, { storeys: 2 }));
+        expect(result.issues).toEqual([]);
+        expect(result.strategy).toBe('compact-hub');
+        expect(result.rooms.map(r => r.key).sort()).toEqual(rooms.map(r => r.key).sort());
+        const pantry = result.rooms.find(r => r.key === 'pantry')!, kitchen = result.rooms.find(r => r.key === 'kitchen')!, laundry = result.rooms.find(r => r.key === 'laundry')!;
+        expect(pantry.accessFrom).toBe('kitchen');
+        expect(pantry.levelId).toBe(kitchen.levelId);
+        expect(pantry.area).toBeGreaterThanOrEqual(5);
+        expect(kitchen.area).toBeGreaterThanOrEqual(10);
+        expect(laundry.accessFrom).not.toBe('kitchen');
+        expect(laundry.key).not.toBe(pantry.key);
+        const serviceDoor = result.elements.find(e => e.id === pantry.doorId)!;
+        expect(serviceDoor.properties).toMatchObject({ accessFrom: 'kitchen', accessTo: 'pantry' });
+        expect(result.connections.filter(c => c.from === 'pantry')).toEqual([]);
+        for (const r of result.rooms) {
+            if (r.use === 'bedroom') expect(r.levelId).toBe(result.floors[1].level.id);
+            if (!['bathroom', 'utility'].includes(r.use)) expect(r.daylight).toBe('exterior-window');
+            for (const id of r.windowIds) {
+                const window = result.elements.find(e => e.id === id)!, host = result.elements.find(e => e.id === window.hostId)!, space = result.elements.find(e => e.id === r.elementId)!;
+                expect(host.properties.exterior).toBe(true);
+                const center = worldToLocal(host, window).x + window.width / 2;
+                expect([localToWorld(host, center, -.03), localToWorld(host, center, host.depth + .03)].some(p => inside(space, p))).toBe(true);
+            }
+        }
+        const stair = result.elements.find(e => e.kind === 'stair')!, landing = result.elements.find(e => e.id === stair.properties.upperLandingId)!;
+        expect(inside(landing, localToWorld(stair, stair.width / 2, stair.depth + .03))).toBe(true);
+        for (const e of result.elements.filter(e => e.levelId === landing.levelId && ['room', 'slab'].includes(e.kind))) expect(overlap(bounds(e, result.footprint), bounds(stair, result.footprint))).toBeLessThan(1e-7);
+        expect(result.elements.some(e => e.kind === 'room' && e.properties.use === 'circulation' && e.width >= result.footprint.width - .5)).toBe(false);
+        checkPhysicalAccess(result);
+        expect(project).toEqual(before);
+
+        // Programme ordering does not make a generic laundry consume the pantry slot.
+        const reordered = previewLayout(project, request([...rooms].reverse(), { storeys: 2, idPrefix: 'reordered' }));
+        expect(reordered.issues).toEqual([]);
+        expect(reordered.strategy).toBe('compact-hub');
+        expect(reordered.rooms.find(r => r.key === 'pantry')!.accessFrom).toBe('kitchen');
+    });
+
+    it('never moves an explicitly upper-floor pantry into a ground-floor kitchen cluster', () => {
+        const rooms: LayoutRoom[] = [room('living', 'living'), room('dining', 'dining'), room('kitchen', 'kitchen'), room('laundry', 'utility'), { ...room('pantry', 'utility'), floor: 1 }, room('ground-bath', 'bathroom'), room('upper-bath', 'bathroom'), ...[1, 2, 3, 4].map(n => room(`bed${n}`, 'bedroom')), room('ensuite', 'bathroom', 'bed1')];
+        const result = previewLayout(createBlankProject('Explicit pantry floor'), request(rooms, { storeys: 2 }));
+        expect(result.issues).toEqual([]);
+        const pantry = result.rooms.find(r => r.key === 'pantry')!, kitchen = result.rooms.find(r => r.key === 'kitchen')!;
+        expect(pantry.levelId).toBe(result.floors[1].level.id);
+        expect(pantry.levelId).not.toBe(kitchen.levelId);
+        expect(pantry.accessFrom).not.toBe('kitchen');
+        checkPhysicalAccess(result);
+    });
+
     it('labels a fixed rotated footprint fallback and preserves physical arrival for explicit upper living', () => {
         const p = createBlankProject('Fixed'), type = p.types.find(t => t.kind === 'slab')!;
         p.elements = [{ id: 'retained', kind: 'slab', name: 'Original slab', levelId: 'level-0', typeId: type.id, material: type.material, x: 23, y: -7, z: -.2, width: 10.4, depth: 14, height: .2, rotation: 27, editable: true, properties: {} }];

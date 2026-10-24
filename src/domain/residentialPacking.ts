@@ -22,7 +22,7 @@ export interface HubPacking {
     upperLandingKey?: string;
     upperLandingClearDepth?: number;
 }
-interface Group { root: LayoutRoom; bath?: LayoutRoom }
+interface Group { root: LayoutRoom; bath?: LayoutRoom; service?: LayoutRoom }
 interface Recipe {
     social?: Group;
     front?: Group;
@@ -43,9 +43,10 @@ const uses: Record<LayoutUse, { area: number; width: number; depth: number }> = 
 const area = (room: LayoutRoom) => room.area ?? uses[room.use].area;
 function height(group: Group | undefined, width: number): number {
     if (!group) return 0;
-    if (width < uses[group.root.use].width - EPS || group.bath && width < 1.5 - EPS) return Infinity;
+    const companion = group.bath ?? group.service;
+    if (width < uses[group.root.use].width - EPS || companion && width < uses[companion.use].width - EPS) return Infinity;
     const root = Math.max(uses[group.root.use].depth, area(group.root) / width);
-    return root + (group.bath ? T + Math.max(1.5, area(group.bath) / width) : 0);
+    return root + (companion ? T + Math.max(uses[companion.use].depth, area(companion) / width) : 0);
 }
 function rearHeight(group: Group | undefined, width: number): number {
     if (!group?.bath) return height(group, width);
@@ -58,9 +59,23 @@ function permutations<T>(values: T[]): T[][] {
     return values.flatMap((value, i) => permutations(values.filter((_, j) => j !== i)).map(rest => [value, ...rest]));
 }
 function recipes(rooms: LayoutRoom[], floor: number, assignment: Map<string, number>, storeys: number): Recipe[] {
-    const groups = rooms.filter(r => r.attachedTo === null && assignment.get(r.key) === floor).map(root => ({ root, bath: rooms.find(r => r.attachedTo === root.key) }));
+    let groups: Group[] = rooms.filter(r => r.attachedTo === null && assignment.get(r.key) === floor).map(root => ({ root, bath: rooms.find(r => r.attachedTo === root.key) }));
     if (groups.length < 2 || groups.length > 6) return [];
     const social = groups.find(g => g.root.use === 'living') ?? groups.find(g => g.root.use === 'dining');
+    // A six-root social floor otherwise exceeds this radial topology's four side bays.
+    // Pair one explicitly requested service room with its same-floor kitchen, preserving
+    // both rooms. Do not alter already-feasible programmes or move a room between floors.
+    if (storeys === 2 && groups.length === 6 && social) {
+        const kitchen = groups.find(g => g.root.use === 'kitchen');
+        const utility = groups.filter(g => g.root.use === 'utility').sort((a, b) => {
+            const pantry = (g: Group) => /pantry/i.test(`${g.root.key} ${g.root.name}`) ? 0 : 1;
+            return pantry(a) - pantry(b) || a.root.key.localeCompare(b.root.key);
+        })[0];
+        if (kitchen && utility) {
+            kitchen.service = utility.root;
+            groups = groups.filter(g => g !== utility);
+        }
+    }
     // A programme-room wall at the upper stair arrival needs a different landing topology.
     // Retain the validated gallery fallback for this explicit uncommon programme.
     if (floor === 1 && social) return [];
@@ -88,7 +103,7 @@ function sized(recipe: Recipe, width: number, center: number, ratio: number, sto
     const sideTotal = width - 2 * T - center - 2 * T;
     const lw = sideTotal * ratio, rw = sideTotal - lw;
     const fronts = [height(recipe.left[0], lw), height(recipe.right[0], rw)], rears = [height(recipe.left[1], lw), height(recipe.right[1], rw)];
-    if (recipe.front?.bath) return null;
+    if (recipe.front?.bath || recipe.front?.service) return null;
     const front = storeys === 2 || recipe.social ? 0 : height(recipe.front, center - C - T), rear = rearHeight(recipe.rear, center);
     if (![...fronts, ...rears, front, rear].every(Number.isFinite) || recipe.social && center < uses[recipe.social.root.use].width) return null;
     // Prefer private rear wings and a shared living/dining/kitchen social chain.
@@ -133,13 +148,15 @@ function build(width: number, depth: number, center: number, selections: SizedRe
         }
         function group(group: Group, box: PackingRect, outer: 'front' | 'rear'): boolean {
             if (height(group, box.width) > box.depth + EPS) return false;
-            if (!group.bath) { add(group.root.key, group.root.name, box, floor, group.root); return true; }
-            // The bath is at the exterior end; the bedroom meets the shared hub directly.
-            const bathDepth = Math.max(1.5, area(group.bath) / box.width), bathY = outer === 'front' ? box.y : box.y + box.depth - bathDepth;
-            const bed = add(group.root.key, group.root.name, { ...box, y: outer === 'front' ? box.y + bathDepth + T : box.y, depth: box.depth - bathDepth - T }, floor, group.root);
-            add(group.bath.key, group.bath.name, { ...box, y: bathY, depth: bathDepth }, floor, group.bath);
-            if (!adjacent(hub, bed)) return false;
-            links.push({ from: group.root.key, to: group.bath.key, floor, kind: 'door' });
+            const companion = group.bath ?? group.service;
+            if (!companion) { add(group.root.key, group.root.name, box, floor, group.root); return true; }
+            // Ensuite/service room occupies the exterior end of its own bedroom/kitchen
+            // cluster. The root room keeps shared access; the companion is never a route.
+            const companionDepth = Math.max(uses[companion.use].depth, area(companion) / box.width), companionY = outer === 'front' ? box.y : box.y + box.depth - companionDepth;
+            const root = add(group.root.key, group.root.name, { ...box, y: outer === 'front' ? box.y + companionDepth + T : box.y, depth: box.depth - companionDepth - T }, floor, group.root);
+            add(companion.key, companion.name, { ...box, y: companionY, depth: companionDepth }, floor, companion);
+            if (!adjacent(hub, root)) return false;
+            links.push({ from: group.root.key, to: companion.key, floor, kind: 'door' });
             return true;
         }
         for (const [i, side] of [recipe.left, recipe.right].entries()) {
@@ -163,7 +180,8 @@ function build(width: number, depth: number, center: number, selections: SizedRe
                 links.push({ from: recipe.rear.root.key, to: recipe.rear.bath.key, floor, kind: 'door' });
             } else if (!group(recipe.rear, box, 'rear')) return null;
         }
-        const roomSpaces = spaces.filter(s => s.floor === floor && s.program && s.program.attachedTo === null);
+        const services = new Set([...recipe.left, ...recipe.right, recipe.front, recipe.rear].flatMap(g => g?.service ? [g.service.key] : []));
+        const roomSpaces = spaces.filter(s => s.floor === floor && s.program && s.program.attachedTo === null && !services.has(s.key));
         const dining = roomSpaces.find(s => s.program?.use === 'dining');
         for (const space of roomSpaces) {
             if (space.key === hub.key) continue;
