@@ -1,3 +1,4 @@
+import {polygonArea} from './polygon';
 import type { BimElement, Project } from '../domain/types';
 import { footprint, formatDistance, localToWorld } from './geometry';
 import type { Point2 } from './geometry';
@@ -63,7 +64,7 @@ export function createPlanDrawing(project:Project,levelId:string,withDimensions=
       const candidates=[[.5,.5],[.25,.5],[.75,.5],[.5,.25],[.5,.75]].map(([x,y])=>toWorld(e.width*x,e.depth*y));
       const labelPoint=candidates.find(point=>!blockers.some(blocker=>point.x+labelWidth/2>blocker.minX&&point.x-labelWidth/2<blocker.maxX&&point.y+.35>blocker.minY&&point.y-.3<blocker.maxY))??candidates[0];
       primitives.push(text({x:labelPoint.x,y:labelPoint.y-.09},e.name,fontSize));
-      const area=e.width*e.depth*(project.units==='ft'?10.7639104:1);
+      const area=(e.footprint?polygonArea(e.footprint):e.width*e.depth)*(project.units==='ft'?10.7639104:1);
       primitives.push(text({x:labelPoint.x,y:labelPoint.y+.24},`${area.toFixed(1)} ${project.units==='ft'?'ft²':'m²'}`,.17));
     }else if(e.kind==='wall')primitives.push(polygon(footprint(e),'#777681','#55545f',.025));
     else if(e.kind==='window') {
@@ -96,6 +97,13 @@ export function footprintSection(points:Point2[],cutY:number):{min:number;max:nu
   if(!hits.length)return null;
   return{min:Math.min(...hits),max:Math.max(...hits)};
 }
+/** Exact connected intervals through a simple extruded polygon; concave voids stay empty. */
+export function footprintSectionIntervals(points:Point2[],cutY:number):{min:number;max:number}[]{
+ const hits:number[]=[],boundaries:{min:number;max:number}[]=[];
+ for(let i=0;i<points.length;i++){const a=points[i],b=points[(i+1)%points.length];if(Math.abs(a.y-b.y)<1e-9){if(Math.abs(a.y-cutY)<1e-9)boundaries.push({min:Math.min(a.x,b.x),max:Math.max(a.x,b.x)});}else if(a.y<=cutY&&b.y>cutY||b.y<=cutY&&a.y>cutY)hits.push(a.x+(b.x-a.x)*(cutY-a.y)/(b.y-a.y));}
+ hits.sort((a,b)=>a-b);for(let i=0;i+1<hits.length;i+=2)if(hits[i+1]-hits[i]>1e-8)boundaries.push({min:hits[i],max:hits[i+1]});
+ const result:{min:number;max:number}[]=[];for(const interval of boundaries.sort((a,b)=>a.min-b.min)){const last=result.at(-1);if(last&&interval.min<=last.max+1e-8)last.max=Math.max(last.max,interval.max);else result.push({...interval});}return result;
+}
 export function createProjectionDrawing(project:Project,mode:'section'|'elevation',withDimensions=true):DrawingData {
   const geometry=project.elements.filter(e=>e.kind!=='room');
   const planBounds=drawingBounds(geometry.map(e=>polygon(footprint(e))));
@@ -115,11 +123,11 @@ export function createProjectionDrawing(project:Project,mode:'section'|'elevatio
       for(let i=start;i<primitives.length;i++)primitives[i].elementId=e.id;
       continue;
     }
-    const points=footprint(e),slice=mode==='section'?footprintSection(points,cutY):{min:Math.min(...points.map(p=>p.x)),max:Math.max(...points.map(p=>p.x))};
-    if(!slice)continue;
+    const points=footprint(e),slices=mode==='section'?footprintSectionIntervals(points,cutY):[{min:Math.min(...points.map(p=>p.x)),max:Math.max(...points.map(p=>p.x))}];
+    if(!slices.length)continue;
     const fill=e.kind==='window'?'#dfebee':e.kind==='door'?'#d8c6ad':e.kind==='wall'?'#eeeae1':e.kind==='reference'?'none':'#d9d5ca';
-    rect(slice.min,slice.max,e.z,e.height,fill,e.kind==='reference'?'#aab0b7':'#8e8a91',e.kind==='reference');
-    if(e.kind==='window')primitives.push(line([{x:(slice.min+slice.max)/2,y:-e.z},{x:(slice.min+slice.max)/2,y:-e.z-e.height}],'#91a8ae',.02));
+    for(const slice of slices){rect(slice.min,slice.max,e.z,e.height,fill,e.kind==='reference'?'#aab0b7':'#8e8a91',e.kind==='reference');
+    if(e.kind==='window')primitives.push(line([{x:(slice.min+slice.max)/2,y:-e.z},{x:(slice.min+slice.max)/2,y:-e.z-e.height}],'#91a8ae',.02));}
     for(let i=start;i<primitives.length;i++)primitives[i].elementId=e.id;
   }
   const geometryBounds=drawingBounds(primitives);

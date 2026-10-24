@@ -45,6 +45,7 @@ function slabAreas(project:Project,plot:NonNullable<PlanningContext['plot']>):{g
  for(let i=0;i<floors.length;i++){
   const rects:Rect[]=[];
   for(const slab of project.elements.filter(e=>e.kind==='slab'&&e.levelId===floors[i].id)){
+   if(slab.footprint)return null; // Rectangular slab-union statutory proxy does not approximate polygon floors.
    const angle=((slab.rotation-plot.rotation)%90+90)%90;if(Math.min(angle,90-angle)>1e-5)return null;
    const pts=footprint(slab).map(p=>worldToLocal(plot,p));rects.push({left:Math.min(...pts.map(p=>p.x)),right:Math.max(...pts.map(p=>p.x)),bottom:Math.min(...pts.map(p=>p.y)),top:Math.max(...pts.map(p=>p.y))});
   }

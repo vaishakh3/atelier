@@ -23,7 +23,7 @@ export function worldToLocal(element:Pick<BimElement,'x'|'y'|'rotation'>, point:
   return { x:dx*Math.cos(angle)+dy*Math.sin(angle), y:-dx*Math.sin(angle)+dy*Math.cos(angle) };
 }
 export function footprint(element:BimElement):Point2[] {
-  return [[0,0],[element.width,0],[element.width,element.depth],[0,element.depth]].map(([x,y])=>localToWorld(element,x,y));
+  return (element.footprint??[{x:0,y:0},{x:element.width,y:0},{x:element.width,y:element.depth},{x:0,y:element.depth}]).map(({x,y})=>localToWorld(element,x,y));
 }
 export function modelBounds(elements:BimElement[]):ModelBounds {
   if (!elements.length) return {minX:0,minY:0,maxX:12,maxY:9,maxZ:3};
@@ -104,7 +104,7 @@ export function wallSegments(wall:BimElement, elements:BimElement[]):WallSegment
   return result;
 }
 
-export function createDrawnElement(project:Project, kind:ElementKind, start:Point2, end:Point2, levelId:string):{element?:BimElement;error?:string} {
+export function createDrawnElement(project:Project, kind:ElementKind, start:Point2, end:Point2, levelId:string,options?:{snapStep?:number|null}):{element?:BimElement;error?:string} {
   const level=project.levels.find(l=>l.id===levelId)??project.levels[0];
   if(!level) return {error:'Add a building level before drawing.'};
   const type=project.types.find(t=>t.kind===kind);
@@ -113,7 +113,7 @@ export function createDrawnElement(project:Project, kind:ElementKind, start:Poin
     const host=nearestHostWall(project,end,levelId);
     if(!host) return {error:'Click within 1.2 m of an editable wall to place an opening.'};
     const width=Math.min(kind==='door'?.9:1.5,host.wall.width);
-    const offset=Math.max(0,Math.min(host.wall.width-width,snap(host.offset-width/2)));
+    const offset=Math.max(0,Math.min(host.wall.width-width,(options?.snapStep===null?host.offset-width/2:snap(host.offset-width/2,options?.snapStep??.25))));
     const point=localToWorld(host.wall,offset,0);
     return {element:{...base,...point,width,depth:host.wall.depth,height:kind==='door'?2.1:1.2,z:host.wall.z+(kind==='window'?.9:0),rotation:host.wall.rotation,hostId:host.wall.id}};
   }

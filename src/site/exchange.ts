@@ -1,0 +1,88 @@
+import type {SiteContext,SiteContextAsset,SiteImportReport,SitePlacement,SiteTerrain,SiteVector} from './types';
+import {siteAssetSchema,siteContextSchema} from './schema';
+const maximumText=2_000_000;
+const point=(values:string[]):SiteVector=>{const numbers=values.slice(0,3).map(Number);if(numbers.length!==3||numbers.some(n=>!Number.isFinite(n)||Math.abs(n)>1e6))throw new Error('Context coordinates must be finite XYZ values within one million source units.');return{x:numbers[0],y:numbers[1],z:numbers[2]};};
+export const defaultSitePlacement=():SitePlacement=>({units:'m',scale:1,rotation:0,origin:{x:0,y:0,z:0}});
+export function placedAssetGeometry(asset:SiteContextAsset){const scale=asset.placement.scale*({m:1,mm:.001,ft:.3048}[asset.placement.units]),angle=asset.placement.rotation*Math.PI/180,c=Math.cos(angle),s=Math.sin(angle),origin=asset.placement.origin;return{vertices:asset.vertices.map(source=>{const v=asset.placement.upAxis==='y'?{x:source.x,y:-source.z,z:source.y}:source;return{x:origin.x+scale*(v.x*c-v.y*s),y:origin.y+scale*(v.x*s+v.y*c),z:origin.z+scale*v.z};}),faces:asset.faces,lines:asset.lines};}
+function checkText(text:string){if(text.length>maximumText||text.includes('\0'))throw new Error('Choose a supported ASCII context file up to 2 MB. Binary DXF is not supported.');}
+function makeAsset(name:string,format:'OBJ'|'DXF',vertices:SiteVector[],faces:number[][],lines:number[][],report:SiteImportReport):SiteContextAsset{
+ if(vertices.length>20000||faces.length>10000||lines.length>5000)throw new Error('Context exceeds the 20,000 vertex / 10,000 triangle / 5,000 line limit.');
+ if(!faces.length&&!lines.length)throw new Error('No supported context faces or lines were found. Read the supported-format limits.');
+ return siteAssetSchema.parse({id:`site-${crypto.randomUUID()}`,name:name.slice(0,250)||`${format} context`,format,source:name,placement:{...defaultSitePlacement(),units:report.unitHint??'m'},vertices,faces,lines,report});
+}
+const subtract=(a:SiteVector,b:SiteVector):SiteVector=>({x:a.x-b.x,y:a.y-b.y,z:a.z-b.z});
+const cross=(a:SiteVector,b:SiteVector):SiteVector=>({x:a.y*b.z-a.z*b.y,y:a.z*b.x-a.x*b.z,z:a.x*b.y-a.y*b.x});
+const dot=(a:SiteVector,b:SiteVector)=>a.x*b.x+a.y*b.y+a.z*b.z;
+/** Fan triangulation is accepted only for planar convex polygons, never for concave or warped faces. */
+function triangulate(indices:number[],vertices:SiteVector[]):number[][]|null{
+ if(indices.length<3||indices.length>64||new Set(indices).size!==indices.length)return null;
+ const p=indices.map(i=>vertices[i]);if(p.some(v=>!v))return null;
+ const n=cross(subtract(p[1],p[0]),subtract(p[2],p[0])),length=Math.hypot(n.x,n.y,n.z);if(length<1e-9)return null;
+ const drop=Math.abs(n.x)>Math.abs(n.y)&&Math.abs(n.x)>Math.abs(n.z)?'x':Math.abs(n.y)>Math.abs(n.z)?'y':'z';
+ const flat=p.map(v=>drop==='x'?{x:v.y,y:v.z}:drop==='y'?{x:v.x,y:v.z}:{x:v.x,y:v.y});
+ const orient=(a:{x:number;y:number},b:{x:number;y:number},c:{x:number;y:number})=>(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+ for(let i=0;i<flat.length;i++)for(let j=i+1;j<flat.length;j++){if(Math.hypot(flat[i].x-flat[j].x,flat[i].y-flat[j].y)<1e-9)return null;if(j===i+1||i===0&&j===flat.length-1)continue;const a=flat[i],b=flat[(i+1)%flat.length],c=flat[j],d=flat[(j+1)%flat.length];if(orient(a,b,c)*orient(a,b,d)<=0&&orient(c,d,a)*orient(c,d,b)<=0&&Math.max(a.x,b.x)>=Math.min(c.x,d.x)&&Math.max(c.x,d.x)>=Math.min(a.x,b.x)&&Math.max(a.y,b.y)>=Math.min(c.y,d.y)&&Math.max(c.y,d.y)>=Math.min(a.y,b.y))return null;}
+ const extent=Math.max(1,...p.map(v=>Math.hypot(v.x-p[0].x,v.y-p[0].y,v.z-p[0].z)));
+ if(p.some(v=>Math.abs(dot(n,subtract(v,p[0])))/length>extent*1e-6))return null;
+ let sign=0;for(let i=0;i<p.length;i++){const turn=dot(cross(subtract(p[(i+1)%p.length],p[i]),subtract(p[(i+2)%p.length],p[(i+1)%p.length])),n);if(Math.abs(turn)<1e-9)continue;const current=Math.sign(turn);if(sign&&sign!==current)return null;sign=current;}
+ return sign?indices.slice(1,-1).map((_,i)=>[indices[0],indices[i+1],indices[i+2]]):null;
+}
+export function parseSiteObj(text:string,name='Imported OBJ'):SiteContextAsset{
+ checkText(text);const vertices:SiteVector[]=[],faces:number[][]=[],lines:number[][]=[];let accepted=0,excluded=0,ignoredAppearance=false,triangulationBudget=0,lineIndices=0;
+ for(const raw of text.replace(/\\\r?\n/g,' ').split(/\r?\n/)){const tokens=raw.split('#')[0].trim().split(/\s+/),kind=tokens.shift();if(!kind)continue;
+  if(kind==='v'){if(tokens.length<3||tokens.length>4||tokens.length===4&&Number(tokens[3])!==1)throw new Error('OBJ vertex colours or non-unit homogeneous coordinates are outside this import subset.');vertices.push(point(tokens));if(vertices.length>20000)throw new Error('Context exceeds 20,000 vertices.');}
+  else if(kind==='f'||kind==='l'){const indices=tokens.map(token=>{const part=token.split('/')[0];if(!/^-?\d+$/.test(part))return -1;const value=Number(part);return value>0?value-1:value<0?vertices.length+value:-1;});if(indices.some(i=>i<0||i>=vertices.length)){excluded++;continue;}if(kind==='l'&&indices.length>=2){lineIndices+=indices.length;if(indices.length>5000||lineIndices>60000||lines.length>=5000)throw new Error('Context linework exceeds the bounded line/index budget. Simplify the source first.');lines.push(indices);accepted++;}else if(kind==='f'){if(indices.length>64){excluded++;continue;}triangulationBudget+=indices.length**2;if(triangulationBudget>1000000)throw new Error('Polygon triangulation exceeds the import work budget. Triangulate the source mesh before importing.');const triangles=triangulate(indices,vertices);if(triangles){if(faces.length+triangles.length>10000)throw new Error('Context exceeds 10,000 triangles. Simplify the source mesh first.');faces.push(...triangles);accepted++;}else excluded++;}else excluded++;}
+  else if(['vt','vn','o','g','s','usemtl','mtllib'].includes(kind)){if(['vt','vn','usemtl','mtllib'].includes(kind))ignoredAppearance=true;}
+  else excluded++;
+ }
+ return makeAsset(name,'OBJ',vertices,faces,lines,{accepted,excluded,warnings:['OBJ has no assumed unit declaration. Confirm source units, axis orientation and placement before accepting.','Only exact vertices, lines and planar convex polygon faces of up to 64 vertices are retained. No architectural editability, watertightness or material fidelity is inferred.',...(excluded?[`${excluded} unsupported or invalid records/faces were excluded; source geometry may be incomplete.`]:[]),...(ignoredAppearance?['Normals, UVs and material/texture files were not imported. No external files were loaded.']:[])]});
+}
+type Pair={code:number;value:string};
+export function parseSiteDxf(text:string,name='Imported DXF'):SiteContextAsset{
+ checkText(text);const raw=text.replace(/\r/g,'').split('\n');if(raw.at(-1)==='')raw.pop();if(raw.length%2)throw new Error('Malformed ASCII DXF group-code pairs.');
+ const pairs:Pair[]=[];for(let i=0;i<raw.length;i+=2){const code=Number(raw[i].trim());if(!Number.isInteger(code)||code<0||code>1071)throw new Error('Malformed DXF group code.');pairs.push({code,value:raw[i+1].trim()});}
+ let unitHint:SiteImportReport['unitHint'];for(let i=0;i<pairs.length-1;i++)if(pairs[i].code===9&&pairs[i].value==='$INSUNITS'){const entry=pairs.slice(i+1,i+5).find(p=>p.code===70);unitHint=entry?.value==='6'?'m':entry?.value==='4'?'mm':entry?.value==='2'?'ft':undefined;}
+ const entities:Pair[][]=[];let inEntities=false,current:Pair[]=[];
+ for(let i=0;i<pairs.length;i++){const p=pairs[i];if(p.code===0&&p.value==='SECTION'&&pairs[i+1]?.code===2){inEntities=pairs[i+1].value==='ENTITIES';i++;continue;}if(p.code===0&&p.value==='ENDSEC'){if(current.length)entities.push(current);current=[];inEntities=false;continue;}if(!inEntities)continue;if(p.code===0){if(current.length)entities.push(current);current=[p];}else if(current.length)current.push(p);}
+ const vertices:SiteVector[]=[],lines:number[][]=[];let accepted=0,excluded=0;
+ const number=(entity:Pair[],code:number,fallback=0)=>{const value=entity.find(pair=>pair.code===code)?.value;const result=value===undefined?fallback:Number(value);if(!Number.isFinite(result)||Math.abs(result)>1e6)throw new Error('DXF contains invalid coordinates.');return result;};
+ const add=(points:SiteVector[],closed:boolean)=>{if(vertices.length+points.length>20000||lines.length>=5000)throw new Error('DXF context exceeds the 20,000 vertex / 5,000 line limit. Simplify the source.');if(points.length>5000)throw new Error('A DXF polyline exceeds 5,000 vertices. Split or simplify the source.');if(points.length<2){excluded++;return;}const indices=points.map(p=>{vertices.push(p);return vertices.length-1;});if(closed)indices.push(indices[0]);lines.push(indices);accepted++;};
+ for(let i=0;i<entities.length;i++){const entity=entities[i],kind=entity[0].value;
+  if(entity.some(p=>p.code===42&&Number(p.value)!==0)||entity.some(p=>p.code===210&&Number(p.value)!==0||p.code===220&&Number(p.value)!==0||p.code===230&&Number(p.value)!==1)){excluded++;continue;}
+  if(kind==='LINE'&&![10,20,11,21].every(code=>entity.some(p=>p.code===code))){excluded++;continue;}
+  if(kind==='LINE')add([{x:number(entity,10),y:number(entity,20),z:number(entity,30)},{x:number(entity,11),y:number(entity,21),z:number(entity,31)}],false);
+  else if(kind==='LWPOLYLINE'){const points:SiteVector[]=[];let pending:number|undefined,malformed=false;for(const p of entity){if(p.code===10){if(pending!==undefined)malformed=true;pending=Number(p.value);}if(p.code===20&&pending===undefined)malformed=true;else if(p.code===20&&pending!==undefined){points.push(point([String(pending),p.value,String(number(entity,38))]));pending=undefined;}}if(malformed||pending!==undefined||number(entity,90,points.length)!==points.length)excluded++;else add(points,(number(entity,70)&1)!==0);}
+  else if(kind==='POLYLINE'){const points:SiteVector[]=[],flags=number(entity,70),is3d=(flags&8)!==0,elevation=number(entity,30);let unsupported=!Number.isInteger(flags)||(flags&(2|4|16|64))!==0;while(entities[i+1]?.[0].value==='VERTEX'){const vertex=entities[++i];if(vertex.some(p=>p.code===42&&Number(p.value)!==0)||![10,20].every(code=>vertex.some(p=>p.code===code)))unsupported=true;points.push({x:number(vertex,10),y:number(vertex,20),z:is3d?number(vertex,30):elevation});}if(entities[i+1]?.[0].value==='SEQEND')i++;else unsupported=true;if(unsupported)excluded++;else add(points,(flags&1)!==0);}
+  else excluded++;
+ }
+ return makeAsset(name,'DXF',vertices,[],lines,{accepted,excluded,...(unitHint?{unitHint}:{}),warnings:['ASCII ENTITIES LINE and straight LWPOLYLINE/POLYLINE only. Curves, bulges, blocks, text, hatches, solids and non-world extrusion planes are excluded.','Imported linework retains centreline vertices and elevation only. Widths/thickness and layer/style attributes are not imported; it is not a closed building volume or shadow obstruction.',...(unitHint?['Source INSUNITS recognised. Confirm placement and survey origin before accepting.']:['Source units are unknown or unsupported. Confirm units explicitly before accepting.']),...(excluded?[`${excluded} entities were excluded; this import is incomplete.`]:[])]});
+}
+/** Explicit survey points; no automatic triangulation or invented terrain between samples. */
+export function parseSurveyTerrain(text:string,source:string):SiteTerrain{
+ checkText(text);if(!source.trim())throw new Error('Enter the survey source and datum before importing terrain.');
+ const vertices=text.split(/\r?\n/).filter(line=>line.trim()&&!line.trim().startsWith('#')).map(line=>{const values=line.trim().split(/[\s,]+/);if(values.length!==3)throw new Error('Each survey row must contain exactly X, Y and Z; remove IDs and headers.');return point(values);});
+ if(!vertices.length||vertices.length>5000)throw new Error('Survey terrain supports 1–5,000 XYZ rows in model metres.');return{source,vertices,faces:[]};
+}
+export function terrainFromAsset(asset:SiteContextAsset,source:string):SiteTerrain{if(asset.format==='image')throw new Error('Raster pixels do not define surveyed terrain geometry.');const geometry=placedAssetGeometry(asset);if(!geometry.faces.length)throw new Error('A terrain mesh needs explicit triangular faces. Survey points alone are not a mesh.');if(geometry.vertices.length>5000)throw new Error('Terrain mesh supports at most 5,000 vertices.');return{source:source.trim()||asset.source,vertices:geometry.vertices,faces:geometry.faces};}
+export function rasterContext(dataUrl:string,width:number,height:number,name:string):SiteContextAsset{
+ if(!Number.isInteger(width)||!Number.isInteger(height)||width<=0||height<=0||width>8192||height>8192)throw new Error('Raster dimensions must be 1–8,192 pixels.');
+ return siteAssetSchema.parse({id:`site-${crypto.randomUUID()}`,name:name.slice(0,250)||'Raster reference',format:'image',source:name,placement:{...defaultSitePlacement(),scale:20/width},vertices:[{x:0,y:0,z:0},{x:width,y:0,z:0},{x:width,y:height,z:0},{x:0,y:height,z:0}],faces:[[0,1,2],[0,2,3]],lines:[],image:{dataUrl,width,height},report:{accepted:1,excluded:0,warnings:['PNG/JPEG reference only. Initial width is an illustrative 20 m: calibrate scale against a surveyed dimension.','Image pixels do not supply terrain, building geometry, georeferencing or shadow obstructions.']}});
+}
+/** Read encoded dimensions before decoding compressed pixels. No SVG or external resource parsing. */
+export function rasterDimensions(bytes:Uint8Array):{width:number;height:number;mime:'image/png'|'image/jpeg'}{
+ const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);let width=0,height=0,mime:'image/png'|'image/jpeg';
+ if(bytes.length>=24&&[137,80,78,71,13,10,26,10].every((value,index)=>bytes[index]===value)&&[73,72,68,82].every((value,index)=>bytes[index+12]===value)){mime='image/png';width=view.getUint32(16);height=view.getUint32(20);}
+ else if(bytes.length>=4&&bytes[0]===255&&bytes[1]===216){mime='image/jpeg';let offset=2;while(offset<bytes.length){if(bytes[offset++]!==255)throw new Error('Malformed JPEG marker sequence.');while(offset<bytes.length&&bytes[offset]===255)offset++;const marker=bytes[offset++];if(marker===217||marker===218)break;if(marker===1||marker>=208&&marker<=215)continue;if(offset+2>bytes.length)break;const length=view.getUint16(offset);if(length<2||offset+length>bytes.length)throw new Error('Malformed JPEG segment length.');if([192,193,194,195,197,198,199,201,202,203,205,206,207].includes(marker)){if(length<7)throw new Error('Malformed JPEG frame header.');height=view.getUint16(offset+3);width=view.getUint16(offset+5);break;}offset+=length;}}
+ else throw new Error('The reference content is not a supported PNG or JPEG.');
+ if(!width||!height||width>8192||height>8192||width*height>16000000)throw new Error('Raster references support at most 8,192 pixels per side and 16 million pixels before decoding.');return{width,height,mime};
+}
+export function exportSiteObj(site:SiteContext):string{siteContextSchema.parse(site);const output=['# Atelier context exchange; metres; source appearance and BIM semantics excluded'];let offset=0;for(const asset of site.contexts.filter(asset=>asset.format!=='image')){const geometry=placedAssetGeometry(asset);output.push(`# ${asset.name.replace(/[\r\n]/g,' ')}`,...geometry.vertices.map(p=>`v ${p.x} ${p.y} ${p.z}`),...geometry.faces.map(f=>`f ${f.map(i=>i+offset+1).join(' ')}`),...geometry.lines.map(l=>`l ${l.map(i=>i+offset+1).join(' ')}`));offset+=geometry.vertices.length;}if(site.terrain){output.push('# Survey terrain',...site.terrain.vertices.map(p=>`v ${p.x} ${p.y} ${p.z}`),...site.terrain.faces.map(f=>`f ${f.map(i=>i+offset+1).join(' ')}`));}return output.join('\n')+'\n';}
+export function exportSiteGeoJson(site:SiteContext){
+ siteContextSchema.parse(site);
+ if(site.latitude===null||site.longitude===null)throw new Error('Set the WGS84 location before exporting geographic context.');
+ if(Math.abs(site.latitude)>85)throw new Error('The local geographic export approximation supports anchors within 85 degrees latitude.');
+ const latitude=site.latitude*Math.PI/180,w=Math.sqrt(1-.00669437999014*Math.sin(latitude)**2),prime=6378137/w,meridian=6378137*(1-.00669437999014)/w**3;
+ const angle=site.trueNorthAngle*Math.PI/180,coordinate=(p:SiteVector)=>{const east=p.x*Math.cos(angle)+p.y*Math.sin(angle),north=-p.x*Math.sin(angle)+p.y*Math.cos(angle);if(Math.hypot(east,north)>10000)throw new Error('GeoJSON context must be within 10 km of the model origin anchor. Rebase surveyed coordinates before exporting.');return[site.longitude!+east/(prime*Math.cos(latitude))*180/Math.PI,site.latitude!+north/meridian*180/Math.PI];};
+ const features=site.contexts.filter(asset=>asset.format!=='image').flatMap(asset=>{const g=placedAssetGeometry(asset);return[{type:'Feature',properties:{name:asset.name,source:asset.source,format:asset.format,modelZByVertex:g.vertices.map(p=>p.z),scope:'Reference context; local first-order WGS84 radii approximation, not a cadastral transformation'},geometry:{type:'GeometryCollection',geometries:[...g.faces.map(face=>({type:'Polygon',coordinates:[[...face,face[0]].map(i=>coordinate(g.vertices[i]))]})),...g.lines.map(line=>({type:'LineString',coordinates:line.map(i=>coordinate(g.vertices[i]))}))]}}];});
+ return{type:'FeatureCollection',metadata:{origin:[site.longitude,site.latitude],trueNorthAngle:site.trueNorthAngle,datumElevation:site.datumElevation,notes:'Small-site first-order WGS84 local-radii conversion; XY origin is the entered anchor. GeoJSON coordinates are 2D; model Z is retained in feature properties, not mislabelled as ellipsoidal altitude. Terrain and raster assets are excluded from this context-only geographic export. No surveyed CRS transformation.'},features};
+}

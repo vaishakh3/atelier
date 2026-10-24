@@ -11,7 +11,7 @@ const isDate = (value:string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isF
 export function scheduleModelSignature(project:Project):string {
   return 'atelier-model-work-v1:'+JSON.stringify({
     levels:project.levels.map(({id,elevation})=>({id,elevation})).sort((a,b)=>a.id.localeCompare(b.id)),
-    elements:project.elements.filter(element=>element.kind!=='reference').map(element=>({id:element.id,kind:element.kind,levelId:element.levelId,typeId:element.typeId,hostId:element.hostId??null,x:element.x,y:element.y,z:element.z,width:element.width,depth:element.depth,height:element.height,rotation:element.rotation})).sort((a,b)=>a.id.localeCompare(b.id)),
+    elements:project.elements.filter(element=>element.kind!=='reference').map(element=>({id:element.id,kind:element.kind,levelId:element.levelId,typeId:element.typeId,hostId:element.hostId??null,x:element.x,y:element.y,z:element.z,width:element.width,depth:element.depth,height:element.height,rotation:element.rotation,...(element.footprint?{footprint:element.footprint}:{})})).sort((a,b)=>a.id.localeCompare(b.id)),
     types:project.types.filter(type=>project.elements.some(element=>element.typeId===type.id)).map(({id,kind,unit,productivity})=>({id,kind,unit,productivity})).sort((a,b)=>a.id.localeCompare(b.id)),
     ...(project.services?{services:{modelSignature:project.services.modelSignature,points:project.services.points,routes:project.services.routes,productivity:project.services.assumptions.rates.map(({key,unit,productivity})=>({key,unit,productivity})).sort((a,b)=>a.key.localeCompare(b.key)),crews:project.services.assumptions.crews}}:{}),
   });

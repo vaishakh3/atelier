@@ -1,3 +1,4 @@
+import {polygonArea} from './polygon';
 import type { BimElement, Project } from '../domain/types';
 import { validateModelGeometry } from './geometry';
 
@@ -35,7 +36,7 @@ export function modelSchedules(project:Project):ModelSchedules {
       const use=value(element,'use')||value(element,'occupancy'),finish=value(element,'finish');
       if(!use)common.issues.push('Room use/occupancy missing.');
       if(!finish)common.issues.push('Room finish missing.');
-      rooms.push({...common,number:value(element,'number')||value(element,'roomNumber'),use,finish,area:round(element.width*element.depth),areaUnit:'m²',width:element.width,depth:element.depth});
+      rooms.push({...common,number:value(element,'number')||value(element,'roomNumber'),use,finish,area:round(element.footprint?polygonArea(element.footprint):element.width*element.depth),areaUnit:'m²',width:element.width,depth:element.depth});
     }else if(element.kind==='door'||element.kind==='window'){
       const common=base(element),host=element.hostId?elementById.get(element.hostId):undefined;
       const row:OpeningScheduleRow={...common,mark:value(element,'mark')||element.name,hostId:element.hostId??'',hostName:host?.name??'Missing host',width:element.width,height:element.height,sillHeight:round(element.z-(host?.z??levelById.get(element.levelId)?.elevation??0)),fireRating:value(element,'fireRating'),count:1,dimensionUnit:'m'};

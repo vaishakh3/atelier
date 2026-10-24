@@ -1,0 +1,7 @@
+import {placedAssetGeometry} from './exchange';
+import type {SiteContext} from './types';
+/** Exact read-only source geometry in model XY; the parent owns its plan transform. */
+export default function SitePlanGeometry({site}:{site?:SiteContext}){
+ if(!site)return null;
+ return <g pointerEvents="none" aria-label="Survey and imported reference context">{site.contexts.map(asset=>{const g=placedAssetGeometry(asset);if(asset.image){const p=g.vertices[0],x=g.vertices[1],y=g.vertices[3];return <image key={asset.id} href={asset.image.dataUrl} x={0} y={0} width={1} height={1} preserveAspectRatio="none" opacity=".62" transform={`matrix(${x.x-p.x} ${x.y-p.y} ${y.x-p.x} ${y.y-p.y} ${p.x} ${p.y})`}/>;}return <g key={asset.id}>{g.faces.map((face,index)=><polygon key={`f-${index}`} points={face.map(i=>`${g.vertices[i].x},${g.vertices[i].y}`).join(' ')} fill="#c1cbbb" fillOpacity=".3" stroke="#9ba896" strokeWidth=".025"/>)}{g.lines.map((line,index)=><polyline key={`l-${index}`} points={line.map(i=>`${g.vertices[i].x},${g.vertices[i].y}`).join(' ')} fill="none" stroke="#8a9e9f" strokeWidth=".045"/>)}</g>;})}{site.terrain&&<g>{site.terrain.faces.map((face,index)=><polygon key={`terrain-${index}`} points={face.map(i=>`${site.terrain!.vertices[i].x},${site.terrain!.vertices[i].y}`).join(' ')} fill="#c4c8a3" fillOpacity=".24" stroke="#a3ab83" strokeWidth=".03"/>)}{site.terrain.vertices.map((p,index)=><circle key={index} cx={p.x} cy={p.y} r={.06} fill="#839777"/>)}</g>}</g>;
+}

@@ -1,4 +1,5 @@
 import type { BimElement, Project, QuantityLine } from '../domain/types';
+import {polygonArea,polygonPerimeter} from '../model/polygon';
 import { hostedOpeningGeometry } from '../model/geometry';
 
 const round = (value:number) => Math.abs(value)<=Number.MAX_SAFE_INTEGER/1e6?Math.round(value * 1e6) / 1e6:value;
@@ -40,10 +41,11 @@ export function quantities(project:Project):QuantityLine[] {
     } else if (['slab', 'roof', 'room'].includes(element.kind)) {
       // MVP roofs are horizontal plan-area assemblies; sloped/freeform roofs remain reference-only.
       if (element.kind === 'room') unit = 'm²';
-      if (unit === 'm³') { quantity = width * depth * height; formula = `${width} × ${depth} × ${height} m³`; }
+      const area=element.footprint?polygonArea(element.footprint):width*depth,perimeter=element.footprint?polygonPerimeter(element.footprint):2*(width+depth),areaFormula=element.footprint?`${round(area)} m² polygon area`:`${width} × ${depth}`;
+      if (unit === 'm³') { quantity = area * height; formula = `${areaFormula} × ${height} m³`; }
       else if (unit === 'ea') { quantity = 1; formula = `1 ${element.kind} element`; }
-      else if (unit === 'm') { quantity = 2 * (width + depth); formula = `2 × (${width} + ${depth}) m perimeter`; }
-      else { unit = 'm²'; quantity = width * depth; formula = `${width} × ${depth} m² plan area`; }
+      else if (unit === 'm') { quantity = perimeter; formula = element.footprint?`${round(perimeter)} m polygon perimeter`:`2 × (${width} + ${depth}) m perimeter`; }
+      else { unit = 'm²'; quantity = area; formula = `${areaFormula} m² plan area`; }
       if (width === 0 || depth === 0) issues.push('Plan dimensions must be positive.');
       if (element.kind === 'roof') issues.push('Roof measured as horizontal plan area; pitch and complex geometry require review.');
     } else if (['door', 'window'].includes(element.kind)) {

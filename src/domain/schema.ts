@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {workbenchSchema} from './designWorkbenchSchema';
+import {siteContextSchema} from '../site/schema';
+import {createDesignLibrarySchema} from '../model/authoring';
+import {viewStateSchema} from '../model/viewState';
+import {polygonProblem} from '../model/polygon';
 import {planningContextSchema} from './planningSchema';
 import {servicePlanSchema} from '../services/schema';
 // The desktop renderer forbids eval. Skip Zod's JIT capability probe entirely,
@@ -6,9 +11,9 @@ import {servicePlanSchema} from '../services/schema';
 z.config({jitless:true});
 const finite=z.number().finite();const nonnegative=finite.min(0);const id=z.string().min(1).max(160);const short=z.string().max(3000);const rate=nonnegative.nullable();
 const kind=z.enum(['wall','slab','door','window','room','roof','stair','reference']);
-export const elementSchema=z.object({id,externalId:short.optional(),kind,name:short,levelId:id,typeId:short,material:short,x:finite,y:finite,z:finite,width:finite.positive(),depth:finite.positive(),height:finite.positive(),rotation:finite,hostId:id.optional(),editable:z.boolean(),properties:z.record(z.string().max(100),z.union([short,finite,z.boolean()]))}).strict();
+export const elementSchema=z.object({footprint:z.array(z.object({x:finite,y:finite}).strict()).min(3).max(128).optional(),id,externalId:short.optional(),kind,name:short,levelId:id,typeId:short,material:short,x:finite,y:finite,z:finite,width:finite.positive(),depth:finite.positive(),height:finite.positive(),rotation:finite,hostId:id.optional(),editable:z.boolean(),properties:z.record(z.string().max(100),z.union([short,finite,z.boolean()]))}).strict().superRefine((element,context)=>{if(!element.footprint)return;const problem=polygonProblem(element.footprint);if(problem)context.addIssue({code:'custom',message:problem});if(!['slab','roof','room','reference'].includes(element.kind))context.addIssue({code:'custom',message:'Polygon footprints are supported for slabs, roofs, rooms and concept/reference masses only.'});if(element.footprint.some(point=>point.x< -1e-6||point.y< -1e-6||point.x>element.width+1e-6||point.y>element.depth+1e-6))context.addIssue({code:'custom',message:'Local polygon vertices must lie within the element width/depth bounds.'});});
 export const levelSchema=z.object({id,name:short,elevation:finite}).strict();
-export const projectSchema=z.object({schemaVersion:z.literal(1),id,name:short,description:short,location:short,planning:planningContextSchema.optional(),services:servicePlanSchema.optional(),units:z.enum(['m','ft']),currency:z.enum(['INR','USD','EUR']),version:z.number().int().min(0),createdAt:short,updatedAt:short,
+export const projectSchema=z.object({workbench:workbenchSchema.optional(),site:siteContextSchema.optional(),designLibrary:createDesignLibrarySchema(elementSchema).optional(),viewState:viewStateSchema.optional(),schemaVersion:z.literal(1),id,name:short,description:short,location:short,planning:planningContextSchema.optional(),services:servicePlanSchema.optional(),units:z.enum(['m','ft']),currency:z.enum(['INR','USD','EUR']),version:z.number().int().min(0),createdAt:short,updatedAt:short,
   levels:z.array(levelSchema).min(1).max(100),grids:z.array(z.object({id,axis:z.enum(['x','y']),value:finite,label:short}).strict()).max(500),elements:z.array(elementSchema).max(10000),
   types:z.array(z.object({id,name:short,kind,material:short,unit:z.enum(['m²','m³','ea','m']),materialRate:rate,labourRate:rate,equipmentRate:rate,wastePercent:nonnegative.max(100),approved:z.boolean(),productivity:finite.positive(),rateDate:short,rateCurrency:z.enum(['INR','USD','EUR']).optional(),rateSource:short.optional()}).strict()).max(2000),
   allowances:z.array(z.object({id,name:short,amount:rate,included:z.boolean()}).strict()).max(1000),

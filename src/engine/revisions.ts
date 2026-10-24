@@ -21,7 +21,7 @@ export interface RevisionComparison {
   schedule:{before:ScheduleResult;after:ScheduleResult;workingDaysDelta:number|null;calendarDaysDelta:number|null;finishDateDeltaDays:number|null;activityChanges:{id:string;name:string;status:'added'|'removed'|'modified';fields:RevisionFieldChange[]}[]};
   issues:string[];
 }
-const geometryFields=new Set(['x','y','z','width','depth','height','rotation','levelId','hostId','kind']);
+const geometryFields=new Set(['x','y','z','width','depth','height','rotation','footprint','levelId','hostId','kind']);
 const rateFields=new Set(['materialRate','labourRate','equipmentRate','wastePercent','rateDate','rateSource','rateCurrency']);
 const rounded=(number:number)=>Math.round(number*1e6)/1e6;
 function stable(value:unknown):string {
@@ -54,7 +54,7 @@ export function compareRevisions(before:Project,after:Project):RevisionCompariso
   const elementChanges:ElementRevision[]=[];
   for(const pair of pairs){
     const element=pair.after??pair.before!;
-    const changes=pair.before&&pair.after?fields(pair.before as unknown as Record<string,unknown>,pair.after as unknown as Record<string,unknown>,['name','kind','levelId','typeId','material','x','y','z','width','depth','height','rotation','hostId','editable','properties']):[];
+    const changes=pair.before&&pair.after?fields(pair.before as unknown as Record<string,unknown>,pair.after as unknown as Record<string,unknown>,['name','kind','levelId','typeId','material','x','y','z','width','depth','height','rotation','footprint','hostId','editable','properties']):[];
     if(pair.before&&pair.after&&!changes.length)continue;
     const categories=new Set<ElementRevision['categories'][number]>();
     for(const change of changes)categories.add(geometryFields.has(change.field)?'geometry':change.field==='typeId'?'type':change.field==='material'||change.field.startsWith('properties.')?'specification':'identity');

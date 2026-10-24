@@ -33,13 +33,14 @@ describe('independently authored buildingSMART IFC examples',()=>{
   const element=result.project.elements[0];expect(element).toMatchObject({externalId:'35DHdKriP6OQIQhodN2chQ',kind:'reference',editable:false,width:20});
   expect(element.height).toBeCloseTo(.3,6);expect(quantities(result.project)[0].quantity).toBe(0);
  });
- it('bounds a straight L-profile extrusion as reference-only without measuring its bounding box as floor area',()=>{
+ it('imports a straight L-profile slab with its actual polygon instead of measuring its bounding box',()=>{
   const text=`ISO-10303-21;HEADER;FILE_DESCRIPTION(('Independent polygon regression'),'2;1');FILE_NAME('L.ifc','2026-10-24',('Atelier test'),('Atelier'),'test','test','');FILE_SCHEMA(('IFC4'));ENDSEC;DATA;
 #1=IFCCARTESIANPOINT((0.,0.));#2=IFCCARTESIANPOINT((4.,0.));#3=IFCCARTESIANPOINT((4.,1.));#4=IFCCARTESIANPOINT((1.,1.));#5=IFCCARTESIANPOINT((1.,3.));#6=IFCCARTESIANPOINT((0.,3.));
 #7=IFCPOLYLINE((#1,#2,#3,#4,#5,#6,#1));#8=IFCARBITRARYCLOSEDPROFILEDEF(.AREA.,'L profile',#7);#9=IFCDIRECTION((0.,0.,1.));#10=IFCEXTRUDEDAREASOLID(#8,$,#9,0.25);#11=IFCSHAPEREPRESENTATION($,'Body','SweptSolid',(#10));#12=IFCPRODUCTDEFINITIONSHAPE($,$,(#11));#13=IFCSLAB('0DWgwt6o1FOx7466fPk$jl',$,'L-shaped slab',$,$,$,#12,$,.FLOOR.);#14=IFCSIUNIT(*,.LENGTHUNIT.,$,.METRE.);ENDSEC;END-ISO-10303-21;`;
   const result=importIfc(text,createBlankProject('Polygon'));
-  expect(result.report).toMatchObject({imported:0,referenceOnly:1,excluded:0});
-  expect(result.project.elements[0]).toMatchObject({kind:'reference',width:4,depth:3,height:.25,editable:false});
-  expect(quantities(result.project)[0].quantity).toBe(0);
+  expect(result.report).toMatchObject({imported:1,referenceOnly:0,excluded:0});
+  expect(result.project.elements[0]).toMatchObject({kind:'slab',width:4,depth:3,height:.25,editable:true});
+  expect(result.project.elements[0].footprint).toHaveLength(6);
+  expect(quantities(result.project)[0]).toMatchObject({quantity:1.5,unit:'m³'}); // 6 m² L-profile × .25 m, not 12 m² bounding box.
  });
 });

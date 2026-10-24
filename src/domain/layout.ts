@@ -240,6 +240,7 @@ export function previewLayout(project: Project, request: LayoutRequest): LayoutP
         return fail('Choose an existing building level with a finite elevation.');
     if (input.footprintId && (!selected || selected.kind !== 'slab' || selected.levelId !== baseLevel.id))
         return fail('Select a floor slab on the base level, or clear the selection.');
+    if (selected?.footprint) return fail('The house layout engine currently needs a rectangular slab. Keep this polygon as authored geometry or choose a separate rectangular footprint.');
     if (selected && locked(project, selected))
         return fail('The selected slab is locked or read-only; choose an editable unlocked footprint.');
     if (selected && project.elements.filter(e => e.id === selected.id).length !== 1)

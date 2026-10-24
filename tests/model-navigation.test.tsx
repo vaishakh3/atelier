@@ -3,7 +3,7 @@ import {afterEach,beforeAll,describe,expect,it,vi} from 'vitest';
 import {cleanup,fireEvent,render,screen} from '@testing-library/react';
 import PlanEditor,{visibleViewportElements} from '../src/components/PlanEditor';
 import type {ModelViewportProps} from '../src/components/PlanEditor';
-import {FitCamera,viewportCameraFrame} from '../src/components/ModelViewport';
+import {CameraTools,FitCamera,viewportCameraFrame} from '../src/components/ModelViewport';
 import {createDemoProject} from '../src/domain/seed';
 import {PerspectiveCamera,Vector3} from 'three';
 
@@ -60,6 +60,24 @@ describe('Familiar non-destructive model navigation',()=>{
   mounted.rerender(<FitCamera props={{...props,fitKey:1,hiddenIds:[]}} controlsRef={controlsRef} view="perspective" selectionKey={2}/>);expect(controlsRef.current.target.toArray()).toEqual([2,.01,1.5]);
   const position=camera.position.clone();mounted.rerender(<FitCamera props={{...props,selectedIds:['far'],fitKey:1,hiddenIds:[]}} controlsRef={controlsRef} view="perspective" selectionKey={2}/>);expect(camera.position.toArray()).toEqual(position.toArray());
   expect(JSON.stringify(props.project)).toBe(snapshot);
+ });
+ it('restores saved 3D eye, target and up vectors after a fresh viewport mount',()=>{
+  const props=fixture(),camera=new PerspectiveCamera(36,1,.05,2000),controlsRef={current:{target:new Vector3(),update:vi.fn()}};
+  cameraContext.state={camera,invalidate:vi.fn(),size:{width:1000,height:700}};
+  const saved={id:'saved-camera',name:'Saved camera',viewMode:'3d' as const,levelId:props.activeLevelId,hiddenIds:[],isolatedIds:[],camera:{position:[21,8,12] as [number,number,number],target:[4,1,3] as [number,number,number],up:[0,1,0] as [number,number,number]}};
+  render(<FitCamera props={{...props,viewRestore:{key:1,view:saved}}} controlsRef={controlsRef} view="custom" selectionKey={0}/>);
+  expect(camera.position.toArray()).toEqual([21,8,12]);expect(controlsRef.current.target.toArray()).toEqual([4,1,3]);expect(camera.up.toArray()).toEqual([0,1,0]);
+ });
+ it('aligns actual facade normals, places a clicked eye and swivels from a fixed eye independently of pan modifiers',()=>{
+  const props={...fixture(),project:createDemoProject(),selectedIds:['wall-n-00']},camera=new PerspectiveCamera(36,1,.05,2000),canvas=document.createElement('canvas');camera.position.set(20,20,20);
+  const controlsRef={current:{target:new Vector3(),enabled:true,enableDamping:true,update:vi.fn(),addEventListener:vi.fn(),removeEventListener:vi.fn()}};
+  cameraContext.state={camera,gl:{domElement:canvas},invalidate:vi.fn(),size:{width:1000,height:700}};
+  const mounted=render(<CameraTools props={props} controlsRef={controlsRef} command={{id:1,action:'align'}} onCapture={vi.fn()}/>);
+  expect(controlsRef.current.target.x).toBe(6);expect(camera.position.x).toBe(6);expect(camera.position.y).toBeCloseTo(1.45);expect(camera.position.z).toBeGreaterThan(controlsRef.current.target.z);
+  mounted.rerender(<CameraTools props={props} controlsRef={controlsRef} command={{id:2,action:'look-from',point:{x:3,y:4,z:5}}} onCapture={vi.fn()}/>);expect(camera.position.toArray()).toEqual([3,5.05,4]);
+  const eye=camera.position.clone(),target=controlsRef.current.target.clone();fireEvent.pointerDown(canvas,{button:2,ctrlKey:true,clientX:100,clientY:100});fireEvent.pointerMove(window,{button:2,ctrlKey:true,clientX:160,clientY:120});
+  expect(camera.position.toArray()).toEqual(eye.toArray());expect(controlsRef.current.target.toArray()).not.toEqual(target.toArray());fireEvent.pointerUp(window,{button:2});expect(controlsRef.current.enabled).toBe(true);expect(controlsRef.current.enableDamping).toBe(true);
+  const pannedTarget=controlsRef.current.target.clone();fireEvent.pointerDown(canvas,{button:2,ctrlKey:true,shiftKey:true,clientX:100,clientY:100});fireEvent.pointerMove(window,{button:2,clientX:200,clientY:200});expect(controlsRef.current.target.toArray()).toEqual(pannedTarget.toArray());
  });
  it('disables selection focus when selection is empty, hidden or belongs to another floor',()=>{
   const props=fixture(),{rerender}=render(<PlanEditor {...props} selectedIds={[]}/>);
