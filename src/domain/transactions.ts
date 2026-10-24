@@ -4,7 +4,8 @@ import { footprint,worldToLocal } from '../model/geometry';
 import {previewRepetition} from './repetition';
 import {previewLayout} from './layout';
 import {previewLocalRoomEdit} from './localRoomEdit';
-import {elementSchema,levelSchema,projectSchema,layoutProposalSchema,localRoomEditProposalSchema} from './schema';
+import {previewUpperFloor} from './upperFloor';
+import {elementSchema,levelSchema,projectSchema,layoutProposalSchema,localRoomEditProposalSchema,upperFloorProposalSchema} from './schema';
 
 export function auditProject(project:Project,action:string,affectedIds:string[]=[],actor='You'):Project {
   return {...project,version:project.version+1,updatedAt:new Date().toISOString(),audit:[{id:uid('audit'),action,affectedIds,actor,timestamp:new Date().toISOString()},...project.audit].slice(0,250)};
@@ -14,7 +15,7 @@ const editableFields=new Set(['name','material','typeId','width','depth','height
 const numericFields=new Set(['width','depth','height','x','y','z','rotation']);
 const geometryFields=new Set(['width','depth','height','x','y','z','rotation']);
 const writableProperties=new Set(['classification','status','specification','fireRating']);
-const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','layout','creations','levelCreations','removals','roomResize','localEdit']);
+const proposalFields=new Set(['id','prompt','summary','kind','changes','issues','selectedIds','model','createdAt','crewCount','repetition','layout','creations','levelCreations','removals','roomResize','localEdit','upperFloor']);
 const unsafeKeys=new Set(['__proto__','prototype','constructor']);
 const own=(object:object,key:string)=>Object.prototype.hasOwnProperty.call(object,key);
 function plain(value:unknown):value is Record<string,unknown> {
@@ -91,6 +92,37 @@ export function applyProposal(project:Project,proposal:AiProposal):Project {
   if(own(proposal,'roomResize')){
     const resize=proposal.roomResize;
     if(!(proposal.kind==='layout'||proposal.kind==='edit'&&proposal.localEdit?.action==='resize-room')||!plain(resize)||Object.keys(resize).length!==4||Object.keys(resize).some(key=>!['roomKey','roomName','sourceArea','targetArea'].includes(key))||typeof resize.roomKey!=='string'||!/^[A-Za-z0-9_-]{1,40}$/.test(resize.roomKey)||typeof resize.roomName!=='string'||!resize.roomName.trim()||resize.roomName.length>3000||[resize.sourceArea,resize.targetArea].some(area=>typeof area!=='number'||!Number.isFinite(area)||area<=0||area>1e6))throw new Error('The room resize context is invalid.');
+  }
+  if(own(proposal,'upperFloor')){
+    if(proposal.kind!=='edit'||own(proposal,'layout')||own(proposal,'localEdit')||own(proposal,'crewCount')||own(proposal,'repetition')||proposal.selectedIds.length)throw new Error('An upper-floor addition must be a separate reviewed operation.');
+    const parsed=upperFloorProposalSchema.safeParse(proposal.upperFloor);
+    if(!parsed.success||parsed.data.idPrefix!==proposal.id)throw new Error('The upper-floor specification is invalid.');
+    if(parsed.data.baselineVersion!==project.version)throw new Error('The project changed after this upper-floor preview. Generate a fresh proposal.');
+    const derived=previewUpperFloor(project,parsed.data);
+    if(derived.issues.length)throw new Error(derived.issues.join(' '));
+    if(derived.levelCreations.length!==1||!derived.creations.length)throw new Error('The upper floor must include exactly one new level and its coordinated geometry.');
+    if(!sameSnapshot(proposal.changes,derived.changes)||!sameSnapshot(proposal.creations??[],derived.creations)||!sameSnapshot(proposal.removals??[],derived.removals)||!sameSnapshot(proposal.levelCreations??[],derived.levelCreations))throw new Error('The upper-floor diff was changed, is incomplete, or is stale. Generate a new proposal.');
+    const removed=new Set<string>(),changed=new Map<string,BimElement>(),created=new Set<string>(),existing=new Set(project.elements.map(element=>element.id)),levels=new Set(project.levels.map(level=>level.id));
+    for(const item of [...derived.changes,...derived.removals]){
+      const current=project.elements.find(element=>element.id===item.elementId),after=item.after as BimElement|null;
+      if(!current||!sameSnapshot(current,item.before)||current.kind!=='roof'||!current.editable||current.externalId!==undefined)throw new Error('Existing floors, rooms, walls, slabs, stairs and openings must remain unchanged when adding this floor.');
+      const fields=[...Object.keys(current),...Object.keys(current.properties).flatMap(key=>[key,`properties.${key}`]),'geometry','geometry.*','position','position.*','dimensions','dimensions.*'];
+      if(layoutScopeLocked(project,current.id,fields,'elements'))throw new Error('A roof affected by the upper floor is locked.');
+      if(after){if(after.id!==current.id||!elementSchema.safeParse(after).success)throw new Error('The roof adjustment is invalid.');changed.set(current.id,after);}else removed.add(current.id);
+    }
+    for(const item of derived.levelCreations){const level=item.after;if(item.before!==null||level.id!==item.levelId||levels.has(level.id)||!levelSchema.safeParse(level).success||Math.abs(level.elevation)>1e7)throw new Error('The added building level is invalid or duplicated.');if(layoutScopeLocked(project,level.id,Object.keys(level),'levels'))throw new Error('The added building level is locked.');levels.add(level.id);}
+    for(const item of derived.creations){
+      const element=item.after;
+      if(item.before!==null||item.elementId!==element.id||existing.has(element.id)||created.has(element.id)||!elementSchema.safeParse(element).success||!levels.has(element.levelId))throw new Error('The upper-floor geometry is invalid or duplicated.');
+      if(layoutScopeLocked(project,element.id,[...Object.keys(element),'geometry','geometry.*','position','position.*','dimensions','dimensions.*'],'elements'))throw new Error('The new upper-floor construction is locked.');
+      created.add(element.id);
+    }
+    const affected=[...changed.values(),...derived.creations.map(item=>item.after)];
+    for(const element of affected){validateGeometry(element);validateProperties(element.properties);const type=project.types.filter(item=>item.id===element.typeId);if(type.length!==1||!type[0].approved||type[0].kind!==element.kind||type[0].material!==element.material)throw new Error('The upper floor requires approved compatible component types.');}
+    const next=structuredClone(project);next.elements=project.elements.filter(element=>!removed.has(element.id)).map(element=>structuredClone(changed.get(element.id)??element));next.elements.push(...structuredClone(derived.creations.map(item=>item.after)));next.levels.push(...structuredClone(derived.levelCreations.map(item=>item.after)));
+    if(!projectSchema.safeParse(next).success)throw new Error('The complete upper-floor addition does not satisfy the project schema.');
+    for(const element of affected)validateOpening(element,next);
+    return auditProject(next,`AI: ${proposal.summary}`,[...changed.keys(),...removed,...created,...derived.levelCreations.map(item=>item.levelId)],'You · AI assisted');
   }
   if(own(proposal,'localEdit')){
     if(proposal.kind!=='edit'||own(proposal,'layout')||own(proposal,'levelCreations')||own(proposal,'crewCount')||own(proposal,'repetition'))throw new Error('A local room edit must be reviewed separately from house layouts and other operations.');

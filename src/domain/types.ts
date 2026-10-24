@@ -37,7 +37,9 @@ export interface LayoutRequest extends LayoutSpec {idPrefix:string}
 export interface LayoutProposal extends LayoutRequest {baselineVersion:number}
 export type LocalRoomEditSpec = {action:'resize-room';roomId:string;targetArea:number} | {action:'replace-rooms';roomIds:string[];name:string;use:LayoutUse};
 export type LocalRoomEditProposal = LocalRoomEditSpec & {baselineVersion:number;idPrefix:string};
-export interface AiProposal { localEdit?:LocalRoomEditProposal; roomResize?:{roomKey:string;roomName:string;sourceArea:number;targetArea:number}; id:string; prompt:string; summary:string; kind:'edit'|'analysis'|'schedule'|'repetition'|'layout'; changes:ElementChange[]; issues:string[]; selectedIds:string[]; model:string; createdAt:string; crewCount?:number; repetition?:RepetitionProposal;layout?:LayoutProposal;creations?:ElementCreation[];levelCreations?:LevelCreation[];removals?:ElementRemoval[]; }
+export interface UpperFloorSpec {baseLevelId:string;rooms:LayoutRoom[];floorHeight:number|null}
+export interface UpperFloorProposal extends UpperFloorSpec {baselineVersion:number;idPrefix:string}
+export interface AiProposal { upperFloor?:UpperFloorProposal; localEdit?:LocalRoomEditProposal; roomResize?:{roomKey:string;roomName:string;sourceArea:number;targetArea:number}; id:string; prompt:string; summary:string; kind:'edit'|'analysis'|'schedule'|'repetition'|'layout'; changes:ElementChange[]; issues:string[]; selectedIds:string[]; model:string; createdAt:string; crewCount?:number; repetition?:RepetitionProposal;layout?:LayoutProposal;creations?:ElementCreation[];levelCreations?:LevelCreation[];removals?:ElementRemoval[]; }
 export interface SavedVersion { id:string; label:string; actor:string; timestamp:string; project:Project; }
 export interface ImportReport { schema:string; imported:number; referenceOnly:number; excluded:number; classes:{name:string; count:number; editable:number; referenceOnly:number}[]; warnings:string[]; source?:{schema:string;entityCount:number;lengthUnitScale:number;unitsDeclared:boolean}; }
 export interface ReviewComment { id:string; versionId:string; author:string; text:string; createdAt:string; }

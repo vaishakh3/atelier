@@ -10,6 +10,8 @@ The desktop application embeds its own service and runs without Node.js or a sep
 
 The copilot keeps the last twelve requests and responses per account, project and design proposal. In encrypted desktop workspaces this conversation persists locally; development sessions use temporary memory. “Make the selected bedroom bigger” proposes a disclosed 20% area increase through a local shared-partition edit. Replacing two adjacent bedrooms with a study merges only those rooms and removes their internal partition. The review shows before/after plans, necessary neighbor/opening changes, and exact unchanged-element counts. Unsupported local geometry is blocked rather than replaced by a whole-house replan; wider replanning requires an explicit request. No changes apply until accepted, and each accepted edit is undoable. Start a new conversation to clear its context without changing the model.
 
+“Add a floor with a huge home theatre and a bathroom” proposes a separate upper floor on supported native rectangular concepts. Existing lower-floor rooms, walls, slabs and openings remain unchanged. The review includes the new level, rooms, actual stair and landings, any permitted roof removal, and exact retained-element counts. A one-storey concept uses a clearly disclosed external stair to avoid cutting through existing rooms; supported existing stair cores can extend a two-storey concept to three levels. Pending upper-floor requests retain their programme for follow-up edits. Access, structural capacity and approvals still need professional review.
+
 ## Product demo
 
 **[Watch the 80-second product demo on Google Drive](https://drive.google.com/file/d/1F28LAAUgV0ebSu1uPgbMvA1y3s3sKpeQ/view)** — publicly viewable; no sign-in required.

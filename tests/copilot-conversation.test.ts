@@ -63,6 +63,13 @@ describe('bounded encrypted copilot conversation memory',()=>{
   await restarted.outcome(key,f.project.id,value.id,'applied');expect((await restarted.get(key,f.project.id)).turns[0].localEdit).toEqual(localEdit);
   await expect(append(restarted,key,f.project,{...value,id:'invalid-local',localEdit:{...localEdit,deleteOtherRooms:true}}as AiProposal)).rejects.toThrow();expect((await restarted.get(key,f.project.id)).turns).toHaveLength(1);
  });
+ it('persists upper-floor intent separately from live levels and retains it after explicit acceptance',async()=>{
+  const f=await fixture(),key=f.history.key('user-owner',f.project),upperFloor={baseLevelId:f.project.levels[0].id,rooms:[{key:'theatre',name:'Home theatre',use:'theater' as const,area:40,attachedTo:null}],floorHeight:3.2,baselineVersion:f.project.version,idPrefix:'upper-floor-test'},value:AiProposal={...proposal('upper-floor-test'),kind:'edit',upperFloor};
+  await append(f.history,key,f.project,value);const restarted=new CopilotConversationStore(new RecordStore(f.directory,Buffer.alloc(32,62))),loaded=await restarted.begin(key,f.project.id);
+  expect(loaded.pendingProposal?.upperFloor).toEqual(upperFloor);expect(loaded.turns[0]).toMatchObject({status:'proposed',upperFloor});expect(f.project.levels).toHaveLength(1);
+  await restarted.outcome(key,f.project.id,value.id,'applied');expect((await restarted.get(key,f.project.id)).turns[0].upperFloor).toEqual(upperFloor);
+  await expect(append(restarted,key,f.project,{...value,id:'invalid-floor',upperFloor:{...upperFloor,floorHeight:20}})).rejects.toThrow();expect((await restarted.get(key,f.project.id)).turns).toHaveLength(1);
+ });
  it('cannot resurrect a reset conversation with an in-flight response',async()=>{
   const f=await fixture(),key=f.history.key('user-owner',f.project),started=await f.history.begin(key,f.project.id);await f.history.reset(key,f.project.id);
   await expect(f.history.complete(key,f.project,started.epoch,proposal('late-layout',true))).rejects.toMatchObject({code:'CONVERSATION_RESET'});
