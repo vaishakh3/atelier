@@ -166,7 +166,7 @@ else{
     await loadCredential();
     dataPath=path.join(app.getPath('userData'),'projects');
     const token=randomBytes(32).toString('hex');desktopCapability=token;
-    const backend=createApp({dataDir:dataPath,staticDir:path.join(app.getAppPath(),'dist'),mode:'desktop',requireIdentity:true,encryptionKey,desktopHeaderToken:token});
+    const backend=createApp({dataDir:dataPath,staticDir:path.join(app.getAppPath(),'dist'),styleAssetDirectory:path.join(app.getAppPath().endsWith('.asar')?`${app.getAppPath()}.unpacked`:app.getAppPath(),'dist','interior-themes'),mode:'desktop',requireIdentity:true,encryptionKey,desktopHeaderToken:token});
     server=await new Promise<Server>((resolve,reject)=>{const instance=backend.listen(0,'127.0.0.1',()=>resolve(instance));instance.once('error',reject);});
     const address=server.address();if(!address||typeof address==='string')throw new Error('Could not allocate desktop backend');origin=`http://127.0.0.1:${address.port}`;
     const desktopSession=session.fromPartition(productionPartition);

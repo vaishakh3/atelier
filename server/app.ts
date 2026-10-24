@@ -48,7 +48,7 @@ function canonicalRevision(incoming:Project,previous:Project,user:PublicUser):Pr
 function checkCopilotProposalRole(role:Role,proposal:AiProposal){
   if(role==='contributor'&&(proposal.kind==='edit'||proposal.kind==='repetition'||proposal.kind==='layout'||proposal.changes.length>0||!!proposal.repetition||!!proposal.layout||!!proposal.creations?.length||proposal.kind==='analysis'&&proposal.crewCount!==undefined))throw new ApiError(403,'FORBIDDEN','Contributors can request planning proposals and analysis only');
 }
-export interface AppOptions {dataDir?:string;staticDir?:string;mode?:'local-pilot'|'desktop-pilot'|'desktop';desktopHeaderToken?:string;requireIdentity?:boolean;encryptionKey?:Uint8Array;propose?:typeof requestProposal}
+export interface AppOptions {dataDir?:string;staticDir?:string;styleAssetDirectory?:string;mode?:'local-pilot'|'desktop-pilot'|'desktop';desktopHeaderToken?:string;requireIdentity?:boolean;encryptionKey?:Uint8Array;propose?:typeof requestProposal}
 export function createApp(options:AppOptions={}){
   const app=express();app.disable('x-powered-by');const mode=options.mode??'local-pilot',desktop=mode==='desktop'||mode==='desktop-pilot',requireIdentity=desktop||options.requireIdentity===true;
   if(requireIdentity&&(!options.encryptionKey||options.encryptionKey.byteLength!==32))throw new Error('Identity mode requires a 32-byte storage encryption key');
@@ -88,7 +88,7 @@ export function createApp(options:AppOptions={}){
   const allowed=(role:Role,list:Role[])=>{if(!list.includes(role))throw new ApiError(403,'FORBIDDEN','Your project role does not allow this action');};
   const match=(req:express.Request,record:ProjectRecord)=>{if(!identity)return;const supplied=req.get('If-Match');if(!supplied)throw new ApiError(428,'REVISION_REQUIRED','A current If-Match revision token is required');if(supplied!==etag(record.project))throw Object.assign(new ApiError(409,'REVISION_CONFLICT','The project changed after your last read. Reload or restore your encrypted recovery copy.'),{etag:etag(record.project),currentVersion:record.project.version});};
   const sendProject=(res:express.Response,record:ProjectRecord,role:Role,status=200)=>{const value=etag(record.project);res.setHeader('ETag',value);res.status(status).json({project:record.project,role,etag:value});};
-  const interiors=createInteriorRenderHandlers({store,loadProject:async(id:string)=>(await load(id)).project,authorize:async(req,res,id,action)=>{const record=await load(id),role=projectRole(req,res,record);if(action==='edit')allowed(role,['admin','editor']);}});
+  const interiors=createInteriorRenderHandlers({store,styleAssetDirectory:options.styleAssetDirectory??path.join(options.staticDir??path.resolve('public'),'interior-themes'),loadProject:async(id:string)=>(await load(id)).project,authorize:async(req,res,id,action)=>{const record=await load(id),role=projectRole(req,res,record);if(action==='edit')allowed(role,['admin','editor']);}});
   app.post('/api/projects/:id/interior/renders',interiors.render);
   app.get('/api/projects/:id/interior/renders',interiors.list);
   app.get('/api/projects/:id/interior/renders/:renderId/image',interiors.image);

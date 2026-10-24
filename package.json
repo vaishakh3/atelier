@@ -1,7 +1,7 @@
 {
   "name": "atelier-bim",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.8.1",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite --host 127.0.0.1\"",
@@ -46,5 +46,5 @@
     "vite": "^7.0.0",
     "vitest": "^5.0.5"
   },
-  "description": "Atelier — an AI copilot for architectural BIM, cost and construction planning"
+  "description": "Atelier \u2014 an AI copilot for architectural BIM, cost and construction planning"
 }
