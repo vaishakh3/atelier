@@ -6,7 +6,7 @@ vi.mock('openai',()=>({default:class {constructor(options:unknown){provider.opti
 import {requestProposal,buildProposal,AI_REQUEST_TIMEOUT_MS,AI_MAX_OUTPUT_TOKENS} from '../server/copilot';
 import {DEFAULT_AI_MODEL,resolveAiModel,aiModelLabel} from '../src/domain/aiConfig';
 import {createDemoProject,createBlankProject} from '../src/domain/seed';
-import {aiOutputSchema} from '../src/domain/schema';
+import {aiOutputSchema,layoutRoomSchema} from '../src/domain/schema';
 import {applyProposal} from '../src/domain/transactions';
 import type {BimElement,LayoutSpec} from '../src/domain/types';
 afterEach(()=>{vi.unstubAllEnvs();provider.calls=0;provider.response=null;provider.options=null;provider.error=null;provider.requests=[];});
@@ -50,6 +50,31 @@ const houseProgram:LayoutSpec={levelId:'level-0',footprintId:null,width:null,dep
  {key:'pool',name:'Indoor swimming pool zone',use:'pool',area:null,attachedTo:null}
 ]};
 const layoutOutput=(layout=houseProgram)=>aiOutputSchema.parse({summary:'Propose the requested house program',operations:[{action:'create-layout',layout}],issues:[]});
+describe('provider room attachment contract',()=>{
+ it('enforces literal null for every non-bathroom attachment in the actual strict SDK JSON schema',()=>{
+  const format=zodTextFormat(aiOutputSchema,'bim_proposal'),schema=JSON.parse(JSON.stringify(format.schema));
+  const layout=schema.properties.operations.items.anyOf.find((branch:any)=>branch.properties.action.const==='create-layout').properties.layout,branches=layout.properties.rooms.items.anyOf;
+  const service=branches.find((branch:any)=>branch.properties.use.enum?.includes('utility')),bathroom=branches.find((branch:any)=>branch.properties.use.const==='bathroom');
+  expect(format.strict).toBe(true);expect(schema.type).toBe('object');expect(schema.anyOf).toBeUndefined();expect(branches).toHaveLength(2);
+  expect(service.properties.attachedTo).toEqual({type:'null'});expect(service.properties.use.enum).not.toContain('bathroom');expect(bathroom.properties.attachedTo.anyOf.map((branch:any)=>branch.type)).toEqual(['string','null']);
+  // Check the converted format sent to OpenAI, not an unexported local Zod refinement.
+  const inspect=(value:any)=>{if(!value||typeof value!=='object')return;if(value.type==='object'){expect(value.additionalProperties).toBe(false);expect([...value.required].sort()).toEqual(Object.keys(value.properties).sort());}expect(value.oneOf).toBeUndefined();for(const child of Object.values(value))if(Array.isArray(child))child.forEach(inspect);else inspect(child);};inspect(schema);
+  const pantry={key:'pantry',name:'Pantry',use:'utility',area:null,attachedTo:null,floor:null};expect(layoutRoomSchema.parse(pantry)).toEqual(pantry);
+  for(const use of service.properties.use.enum)expect(layoutRoomSchema.safeParse({...pantry,use,attachedTo:'kitchen'}).success).toBe(false);
+  expect(layoutRoomSchema.safeParse({...pantry,use:'bathroom',attachedTo:'bedroom'}).success).toBe(true);
+ });
+
+ it('retains the requested pantry programme and derives kitchen access separately from ensuite attachment',async()=>{
+  vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');
+  const room=(key:string,use:LayoutSpec['rooms'][number]['use'],attachedTo:string|null=null):LayoutSpec['rooms'][number]=>({key,name:key==='pantry'?'Pantry':key,use,area:null,attachedTo,floor:null});
+  const rooms=[room('living','living'),room('dining','dining'),room('kitchen','kitchen'),room('laundry','utility'),room('pantry','utility'),room('guest-wc','bathroom'),room('family-bath','bathroom'),...[1,2,3,4].map(index=>room(`bed${index}`,'bedroom')),room('ensuite','bathroom','bed1')],spec:LayoutSpec={...houseProgram,rooms,storeys:2};
+  provider.response={status:'completed',output_parsed:layoutOutput(spec)};const project=createBlankProject('Pantry connection'),before=structuredClone(project),proposal=await requestProposal({project,selectedIds:[],prompt:'Make this two-storey house with a pantry attached directly to the kitchen.'});
+  expect(proposal.layout!.rooms).toEqual(rooms);const created=proposal.creations!.map(creation=>creation.after),pantry=created.find(element=>element.kind==='room'&&element.properties.layoutKey==='pantry')!;
+  expect(pantry.properties).toMatchObject({use:'utility',accessFrom:'kitchen'});expect(pantry.properties.attachedTo).toBeUndefined();expect(created.some(element=>element.kind==='door'&&element.properties.accessFrom==='kitchen'&&element.properties.accessTo==='pantry')).toBe(true);
+  expect(String(provider.requests[0].instructions)).toContain('Every non-bathroom room must use attachedTo:null');expect(String(provider.requests[0].instructions)).toContain('A pantry or laundry uses use:utility');expect(project).toEqual(before);expect(()=>applyProposal(project,proposal)).not.toThrow();
+  const invalidEnsuite={...spec,rooms:rooms.map(room=>room.key==='ensuite'?{...room,attachedTo:'kitchen'}:room)};expect(()=>buildProposal(layoutOutput(invalidEnsuite),{project,selectedIds:[],prompt:'Invalid ensuite target'},DEFAULT_AI_MODEL)).toThrow(/attached bathroom must reference a primary bedroom/);
+ });
+});
 describe('supported house creation through structured provider operations',()=>{
  it('turns the reported house request into a detached room/wall/opening preview without requiring dimensions or existing edit targets',async()=>{
   vi.stubEnv('OPENAI_API_KEY','synthetic-credential-do-not-echo');vi.stubEnv('OPENAI_MODEL','');provider.response={status:'completed',output_parsed:layoutOutput()};
@@ -71,8 +96,9 @@ describe('two-storey and replan provider contract',()=>{
  it('produces the real strict OpenAI schema with required nullable additions while accepting old stored programs',()=>{
   const format=zodTextFormat(aiOutputSchema,'bim_proposal'),schema=JSON.parse(JSON.stringify(format.schema));
   const create=schema.properties.operations.items.anyOf.find((value:any)=>value.properties.action.const==='create-layout').properties.layout;
-  expect(format.strict).toBe(true);expect(create.required).toEqual(expect.arrayContaining(['storeys','floorHeight','replaceConcept']));expect(create.properties.rooms.items.required).toContain('floor');
-  for(const key of ['storeys','floorHeight','replaceConcept'])expect(JSON.stringify(create.properties[key])).toContain('null');expect(JSON.stringify(create.properties.rooms.items.properties.floor)).toContain('null');
+  expect(format.strict).toBe(true);expect(create.required).toEqual(expect.arrayContaining(['storeys','floorHeight','replaceConcept']));
+  for(const branch of create.properties.rooms.items.anyOf){expect(branch.required).toContain('floor');expect(JSON.stringify(branch.properties.floor)).toContain('null');}
+  for(const key of ['storeys','floorHeight','replaceConcept'])expect(JSON.stringify(create.properties[key])).toContain('null');
   expect(layoutOutput().operations).toHaveLength(1);
  });
 
