@@ -5,6 +5,7 @@ import InspectorCopilot from '../src/components/InspectorCopilot';
 import LayoutProposalPreview from '../src/components/LayoutProposalPreview';
 import {createBlankProject,createDemoProject} from '../src/domain/seed';
 import {previewLayout} from '../src/domain/layout';
+import {generateLayoutAlternatives} from '../src/domain/layoutAlternatives';
 import {applyProposal} from '../src/domain/transactions';
 import {DEFAULT_AI_MODEL} from '../src/domain/aiConfig';
 import {num} from '../src/components/ui';
@@ -31,6 +32,10 @@ function provider(make=(project:Project,selectedIds:string[])=>layoutProposal(pr
 }
 function props(project:Project){return{project,selectedIds:[],onSelect:vi.fn(),onUpdate:vi.fn(),onDelete:vi.fn(),commit:vi.fn(),aiReady:true,role:'admin' as const,notify:vi.fn(),activeLevelId:project.levels[0].id};}
 function sendPrompt(value='Create a house layout'){fireEvent.change(screen.getByRole('textbox',{name:'Ask the BIM copilot'}),{target:{value}});fireEvent.click(screen.getByRole('button',{name:'Send copilot request'}));}
+function nineRoomProgramme():LayoutProposal['rooms']{return[...Array.from({length:3},(_,index)=>[
+ {key:`bed${index}`,name:`Bedroom ${index+1}`,use:'bedroom' as const,area:14,attachedTo:null,floor:0 as const},
+ {key:`bath${index}`,name:`Ensuite ${index+1}`,use:'bathroom' as const,area:4.5,attachedTo:`bed${index}`,floor:0 as const},
+]).flat(),{key:'kitchen',name:'Kitchen',use:'kitchen',area:10,attachedTo:null,floor:0},{key:'library',name:'Library',use:'study',area:9,attachedTo:null,floor:0},{key:'pool',name:'Indoor pool zone',use:'pool',area:24,attachedTo:null,floor:0}];}
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 
 describe('reviewable copilot house layouts',()=>{
@@ -65,7 +70,7 @@ describe('reviewable copilot house layouts',()=>{
   const project=createBlankProject('Accepted house'),before=structuredClone(project),api=provider(),base=props(project),onApplied=vi.fn();
   const view=render(<InspectorCopilot {...base} onApplied={onApplied} getCurrentProject={()=>structuredClone(project)}/>);sendPrompt();
   await screen.findByText('House layout preview');expect(project).toEqual(before);expect(base.commit).not.toHaveBeenCalled();
-  expect(screen.getByText('Construction plan')).toBeTruthy();expect(screen.getByText('Review activities')).toBeTruthy();expect(screen.queryByText('0 days')).toBeNull();
+  expect(screen.getByText('Construction plan')).toBeTruthy();expect(screen.getByText(/draft days/)).toBeTruthy();expect(screen.getByText(/Accepting geometry leaves construction quantities/)).toBeTruthy();expect(screen.queryByText('0 days')).toBeNull();
   fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog');
   fireEvent.click(within(dialog).getByRole('button',{name:'Accept layout'}));
   expect(base.commit).toHaveBeenCalledTimes(1);expect(onApplied).toHaveBeenCalledTimes(1);expect(screen.queryByRole('dialog')).toBeNull();expect(screen.queryByRole('button',{name:'Accept layout'})).toBeNull();
@@ -215,5 +220,50 @@ describe('reviewable copilot house layouts',()=>{
  it('shows the current connection model without rewriting a historical proposal model',async()=>{
   const project=createBlankProject('Historical provenance');provider((project,ids)=>({...layoutProposal(project,ids),model:'gpt-4.1-mini'}));render(<InspectorCopilot {...props(project)} model="custom-model-identifier"/>);sendPrompt();
   await screen.findByText('House layout preview');expect(screen.getByText(/custom-model-identifier/)).toBeTruthy();expect(screen.getByText(/gpt-4.1-mini · Quantities/)).toBeTruthy();
+ });
+
+ it('compares only distinct options and exposes their real room guides without applying anything',async()=>{
+  const source=createBlankProject('One-room alternatives'),before=structuredClone(source),base=props(source);
+  provider((project,ids)=>layoutProposal(project,ids,{rooms:[{key:'living',name:'Living room',use:'living',area:20,attachedTo:null}]}));
+  render(<InspectorCopilot {...base}/>);sendPrompt('Create one living space');await screen.findByText('House layout preview');
+  const comparison=screen.getByRole('region',{name:'Design alternatives'});
+  expect(within(comparison).getByText('1 distinct arrangement')).toBeTruthy();expect(within(comparison).getAllByRole('button')).toHaveLength(1);
+  expect(within(comparison).getByRole('button',{name:'Review Balanced layout'}).getAttribute('aria-pressed')).toBe('true');
+  expect(comparison.textContent).toContain('same physical arrangement');expect(comparison.textContent).toContain('mapped-cost coverage');expect(comparison.textContent).toContain('calendar days');expect(comparison.textContent).toContain('accepting a layout does not approve its construction plan');
+  fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog'),quality=within(dialog).getByRole('region',{name:'Room planning quality'});
+  expect(within(quality).getByRole('table',{name:'Room proportion and fit guides'})).toBeTruthy();expect(quality.textContent).toContain('Actual / upper area guide');expect(quality.textContent).toContain('Assumed fit rectangle');expect(quality.textContent).toContain('Furniture, door swings');
+  fireEvent.click(within(dialog).getByRole('button',{name:'Reject layout'}));expect(base.commit).not.toHaveBeenCalled();expect(source).toEqual(before);
+ });
+
+ it('shows unresolved activity durations as unavailable while keeping unknown costs visible',async()=>{
+  const source=createBlankProject('Unresolved productivity'),base=props(source),wallType=source.types.find(type=>type.kind==='wall')!;wallType.materialRate=null;source.schedule.activities=[{id:'unresolved-task',name:'Unresolved task',category:'allowance',quantity:1,unit:'scope item',productivity:1,minDuration:1,predecessors:['missing-prerequisite'],crewDemand:1,maxCrews:1,leadTime:0,quantityMode:'manual'}];
+  provider();render(<InspectorCopilot {...base}/>);sendPrompt();await screen.findByText('House layout preview');
+  const comparison=screen.getByRole('region',{name:'Design alternatives'});
+  expect(comparison.textContent).toContain('Unavailable until plan review');expect(comparison.textContent).toContain('mapped-cost coverage');expect(comparison.textContent).not.toContain('0 calendar days');
+  expect(screen.getByText('Review activities')).toBeTruthy();expect(screen.getByText(/Completion-time change is unavailable/)).toBeTruthy();
+  expect(base.commit).not.toHaveBeenCalled();
+ });
+
+ it('switches to a distinct design and accepts precisely its reviewed elements in one transaction',async()=>{
+  const source=createBlankProject('Selectable design options'),before=structuredClone(source),base=props(source),onApplied=vi.fn();let offered:AiProposal|undefined;
+  const api=provider((project,ids)=>(offered=layoutProposal(project,ids,{rooms:nineRoomProgramme(),storeys:1})));
+  render(<InspectorCopilot {...base} onApplied={onApplied} getCurrentProject={()=>structuredClone(source)}/>);sendPrompt('Design this nine-room house');await screen.findByText('House layout preview',{}, {timeout:5000});
+  const choices=generateLayoutAlternatives(source,offered!),chosen=choices.alternatives.find(option=>option.variant==='daylight')!;expect(chosen).toBeTruthy();
+  const comparison=screen.getByRole('region',{name:'Design alternatives'});fireEvent.click(within(comparison).getByRole('button',{name:'Review Window priority layout'}));
+  expect(within(comparison).getByRole('button',{name:'Review Window priority layout'}).getAttribute('aria-pressed')).toBe('true');expect(within(comparison).getByRole('button',{name:'Review Balanced layout'}).getAttribute('aria-pressed')).toBe('false');
+  expect(base.commit).not.toHaveBeenCalled();expect(source).toEqual(before);expect(api.requests).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog'),elements=within(dialog).getByRole('table',{name:'Complete proposed creation list'});
+  for(const creation of chosen.proposal.creations!)expect(elements.textContent).toContain(creation.elementId);
+  expect(elements.textContent).not.toContain(offered!.creations![0].elementId);expect(within(dialog).getByRole('button',{name:'Review Window priority layout'}).getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(within(dialog).getByRole('button',{name:'Accept layout'}));expect(base.commit).toHaveBeenCalledTimes(1);expect(onApplied).toHaveBeenCalledWith(chosen.proposal);
+  const [next,,ids]=base.commit.mock.calls[0] as unknown as [Project,string,string[]];expect(next.elements).toEqual(chosen.preview.elements);expect(next.version).toBe(source.version+1);expect(ids).toEqual(chosen.proposal.creations!.map(creation=>creation.elementId));expect(source).toEqual(before);
+ });
+
+ it('keeps an alternative visible after a source revision but cannot accept it, then rejects without edits',async()=>{
+  const source=createBlankProject('Stale selected design'),before=structuredClone(source),base=props(source),api=provider((project,ids)=>layoutProposal(project,ids,{rooms:nineRoomProgramme(),storeys:1})),view=render(<InspectorCopilot {...base}/>);
+  sendPrompt();await screen.findByText('House layout preview',{}, {timeout:5000});view.rerender(<InspectorCopilot {...base} project={{...source,version:source.version+1}}/>);
+  fireEvent.click(screen.getByRole('button',{name:'Review Window priority layout'}));expect((screen.getByRole('button',{name:'Accept layout'}) as HTMLButtonElement).disabled).toBe(true);expect(screen.getByRole('img',{name:/Proposed house floor plan/})).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:/Review plan & all/}));const dialog=screen.getByRole('dialog');expect((within(dialog).getByRole('button',{name:'Accept layout'}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(within(dialog).getByRole('button',{name:'Reject layout'}));expect(base.commit).not.toHaveBeenCalled();expect(source).toEqual(before);expect(api.requests).toHaveLength(1);expect(screen.getByText('Proposal rejected. Your project is unchanged.')).toBeTruthy();
  });
 });

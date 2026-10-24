@@ -24,6 +24,8 @@ export interface HubPacking {
 }
 interface Group { root: LayoutRoom; bath?: LayoutRoom; service?: LayoutRoom }
 interface Recipe {
+    coreBath?: LayoutRoom;
+    coreUtility?: LayoutRoom;
     social?: Group;
     front?: Group;
     rear?: Group;
@@ -58,14 +60,14 @@ function permutations<T>(values: T[]): T[][] {
     if (values.length < 2) return [values];
     return values.flatMap((value, i) => permutations(values.filter((_, j) => j !== i)).map(rest => [value, ...rest]));
 }
-function recipes(rooms: LayoutRoom[], floor: number, assignment: Map<string, number>, storeys: number): Recipe[] {
-    let groups: Group[] = rooms.filter(r => r.attachedTo === null && assignment.get(r.key) === floor).map(root => ({ root, bath: rooms.find(r => r.attachedTo === root.key) }));
+function recipes(rooms: LayoutRoom[], floor: number, assignment: Map<string, number>, storeys: number, coreBath?: LayoutRoom, coreUtility?: LayoutRoom): Recipe[] {
+    let groups: Group[] = rooms.filter(r => r.attachedTo === null && assignment.get(r.key) === floor && r !== coreBath && r !== coreUtility).map(root => ({ root, bath: rooms.find(r => r.attachedTo === root.key) }));
     if (groups.length < 2 || groups.length > 6) return [];
-    const social = groups.find(g => g.root.use === 'living') ?? groups.find(g => g.root.use === 'dining');
+    const social = coreUtility ? undefined : groups.find(g => g.root.use === 'living') ?? groups.find(g => g.root.use === 'dining');
     // A six-root social floor otherwise exceeds this radial topology's four side bays.
     // Pair one explicitly requested service room with its same-floor kitchen, preserving
     // both rooms. Do not alter already-feasible programmes or move a room between floors.
-    if (storeys === 2 && groups.length === 6 && social) {
+    if (storeys === 2 && ((groups.length === 6 || coreBath && groups.length === 5) && social || coreUtility)) {
         const kitchen = groups.find(g => g.root.use === 'kitchen');
         const utility = groups.filter(g => g.root.use === 'utility').sort((a, b) => {
             const pantry = (g: Group) => /pantry/i.test(`${g.root.key} ${g.root.name}`) ? 0 : 1;
@@ -81,10 +83,11 @@ function recipes(rooms: LayoutRoom[], floor: number, assignment: Map<string, num
     if (floor === 1 && social) return [];
     const remaining = groups.filter(g => g !== social), result: Recipe[] = [];
     // Public living/dining is the actual social hub. Without it a foyer is circulation only.
-    const rearChoices = social && storeys === 2 ? [undefined] : [...remaining].sort((a, b) => {
+    const rearChoices: (Group | undefined)[] = social && storeys === 2 ? [undefined] : [...remaining].sort((a, b) => {
         const priority = (g: Group) => social && g.root.use === 'dining' ? -5 : g.root.use === 'pool' ? -3 : -uses[g.root.use].width;
         return priority(a) - priority(b) || a.root.key.localeCompare(b.root.key);
     }).slice(0, 4);
+    if (coreBath && !social) rearChoices.unshift(undefined);
     for (const rear of rearChoices) {
         const rest = remaining.filter(g => g !== rear);
         const frontChoices = social || storeys === 2 ? [undefined] : rest.length > 4 ? rest : [undefined, ...rest];
@@ -93,13 +96,22 @@ function recipes(rooms: LayoutRoom[], floor: number, assignment: Map<string, num
             if (sides.length < 2 || sides.length > 4) continue;
             for (const order of permutations(sides)) {
                 const left = order.length === 2 ? [order[0]] : [order[0], order[2]], right = order.length === 2 ? [order[1]] : order.length === 3 ? [order[1]] : [order[1], order[3]];
-                result.push({ social, front, rear, left, right });
+                result.push({ social, front, rear, left, right, coreBath, coreUtility });
             }
+        }
+    }
+    if (storeys === 2 && !coreBath) {
+        const bath = rooms.find(r => r.use === 'bathroom' && r.attachedTo === null && assignment.get(r.key) === floor);
+        if (bath) {
+            result.push(...recipes(rooms, floor, assignment, storeys, bath));
+            const utility = floor === 0 ? rooms.find(r => r.use === 'utility' && r.attachedTo === null && assignment.get(r.key) === floor && !/pantry/i.test(`${r.key} ${r.name}`)) : undefined;
+            if (utility) result.push(...recipes(rooms, floor, assignment, storeys, bath, utility));
         }
     }
     return result;
 }
 function sized(recipe: Recipe, width: number, center: number, ratio: number, storeys: number): SizedRecipe | null {
+    if (recipe.coreBath && center - 2 * C - T < uses.bathroom.width - EPS) return null;
     const sideTotal = width - 2 * T - center - 2 * T;
     const lw = sideTotal * ratio, rw = sideTotal - lw;
     const fronts = [height(recipe.left[0], lw), height(recipe.right[0], rw)], rears = [height(recipe.left[1], lw), height(recipe.right[1], rw)];
@@ -113,7 +125,7 @@ function sized(recipe: Recipe, width: number, center: number, ratio: number, sto
         if (side.length > 1 && side[0].root.use === 'pool' && side[1].root.use === 'bedroom') penalty += 1;
     }
     if (recipe.social?.root.use === 'living' && recipe.rear?.root.use === 'dining') penalty -= 3;
-    return { recipe, leftWidth: lw, rightWidth: rw, centerWidth: center, fronts, rears, front, rear, score: fronts.reduce((a, b) => a + b, 0) + rears.reduce((a, b) => a + b, 0) + front + rear + penalty };
+    return { recipe, leftWidth: lw, rightWidth: rw, centerWidth: center, fronts, rears, front, rear, score: fronts.reduce((a, b) => a + b, 0) + rears.reduce((a, b) => a + b, 0) + front + rear + penalty - (recipe.coreBath ? 4 : 0) };
 }
 function adjacent(a: PackingRect, b: PackingRect): boolean {
     const overlapX = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x), overlapY = Math.min(a.y + a.depth, b.y + b.depth) - Math.max(a.y, b.y);
@@ -126,6 +138,7 @@ function build(width: number, depth: number, center: number, selections: SizedRe
     let entryKey = '', lowerLandingKey: string | undefined, upperLandingKey: string | undefined;
     for (let floor = 0; floor < selections.length; floor++) {
         const selected = selections[floor], recipe = selected.recipe, centerX = T + selected.leftWidth + T, socialFront = !!recipe.social && storeys === 1;
+        const ownAccess = new Set<string>();
         const hubKey = recipe.social?.root.key ?? (floor === 0 ? 'circulation' : '@landing-1');
         const hub = add(hubKey, recipe.social?.root.name ?? (floor === 0 ? 'Shared entrance foyer' : 'Shared upper landing'), {
             x: centerX, y: socialFront ? T : hubY + (recipe.social ? T : 0), width: center,
@@ -135,8 +148,9 @@ function build(width: number, depth: number, center: number, selections: SizedRe
         if (recipe.social && (hub.depth < uses[recipe.social.root.use].depth - EPS || hub.width * hub.depth < area(recipe.social.root) - EPS)) return null;
         if (socialFront) { if (floor === 0) entryKey = hubKey; }
         else {
-            const foyerWidth = storeys === 2 ? center - C : recipe.front ? C : center;
-            const foyer = add(`@foyer-${floor}`, floor === 0 ? 'Entrance branch' : 'Stair-side access branch', { x: centerX, y: T, width: foyerWidth, depth: hubY - T }, floor);
+            const coreWidth = recipe.coreBath ? center - 2 * C - T : 0;
+            const foyerWidth = recipe.coreBath ? C : storeys === 2 ? center - C : recipe.front ? C : center;
+            const foyer = add(`@foyer-${floor}`, floor === 0 ? 'Entrance branch' : 'Stair-side access branch', { x: centerX + (recipe.coreBath ? coreWidth + T : 0), y: T, width: foyerWidth, depth: hubY - T }, floor);
             if (floor === 0) entryKey = foyer.key;
             links.push({ from: foyer.key, to: hub.key, floor, kind: recipe.social ? 'door' : 'open' });
             if (storeys === 2) {
@@ -145,11 +159,37 @@ function build(width: number, depth: number, center: number, selections: SizedRe
                 if (floor === 0) lowerLandingKey = landing.key;
                 if (floor === 1) upperLandingKey = hub.key;
             }
+            if (recipe.coreBath) {
+                let nextY = T;
+                for (const program of [recipe.coreBath, recipe.coreUtility].filter((r): r is LayoutRoom => !!r)) {
+                    const serviceDepth = Math.max(uses[program.use].depth, area(program) / coreWidth);
+                    if (nextY + serviceDepth + T + .6 > hubY || coreWidth * serviceDepth > area(program) * 1.6 + EPS) return null;
+                    const service = add(program.key, program.name, { x: centerX, y: nextY, width: coreWidth, depth: serviceDepth }, floor, program);
+                    links.push({ from: foyer.key, to: service.key, floor, kind: 'door' });
+                    ownAccess.add(service.key);
+                    nextY += serviceDepth + T;
+                }
+                const access = add(`@core-access-${floor}`, 'Stair-side service access', { x: centerX, y: nextY, width: coreWidth, depth: hubY - nextY }, floor);
+                links.push({ from: foyer.key, to: access.key, floor, kind: 'open' }, { from: access.key, to: hub.key, floor, kind: recipe.social ? 'door' : 'open' });
+            }
         }
         function group(group: Group, box: PackingRect, outer: 'front' | 'rear'): boolean {
             if (height(group, box.width) > box.depth + EPS) return false;
             const companion = group.bath ?? group.service;
-            if (!companion) { add(group.root.key, group.root.name, box, floor, group.root); return true; }
+            if (!companion) {
+                // Small service rooms retain a measured target envelope rather than
+                // absorbing a whole aligned bay. Any remaining bay is explicitly
+                // modelled as shared access, so its area cannot vanish from metrics.
+                const targetDepth = Math.max(uses[group.root.use].depth, area(group.root) / box.width);
+                if (['bathroom', 'utility'].includes(group.root.use) && box.width * box.depth > area(group.root) * 1.6 && box.depth - targetDepth - T >= C) {
+                    const root = add(group.root.key, group.root.name, { ...box, y: outer === 'front' ? box.y : box.y + box.depth - targetDepth, depth: targetDepth }, floor, group.root);
+                    const access = add(`@service-access-${group.root.key}`, `${group.root.name} access alcove`, { ...box, y: outer === 'front' ? box.y + targetDepth + T : box.y, depth: box.depth - targetDepth - T }, floor);
+                    if (!adjacent(hub, access)) return false;
+                    links.push({ from: hub.key, to: access.key, floor, kind: recipe.social ? 'door' : 'open' }, { from: access.key, to: root.key, floor, kind: 'door' });
+                    ownAccess.add(root.key);
+                } else add(group.root.key, group.root.name, box, floor, group.root);
+                return true;
+            }
             // Ensuite/service room occupies the exterior end of its own bedroom/kitchen
             // cluster. The root room keeps shared access; the companion is never a route.
             const companionDepth = Math.max(uses[companion.use].depth, area(companion) / box.width), companionY = outer === 'front' ? box.y : box.y + box.depth - companionDepth;
@@ -184,7 +224,7 @@ function build(width: number, depth: number, center: number, selections: SizedRe
         const roomSpaces = spaces.filter(s => s.floor === floor && s.program && s.program.attachedTo === null && !services.has(s.key));
         const dining = roomSpaces.find(s => s.program?.use === 'dining');
         for (const space of roomSpaces) {
-            if (space.key === hub.key) continue;
+            if (space.key === hub.key || ownAccess.has(space.key)) continue;
             if (space.program!.use === 'kitchen' && dining && dining.key !== space.key && !adjacent(dining, space)) return null;
             const from = space.program!.use === 'kitchen' && dining && dining.key !== space.key && adjacent(dining, space) ? dining : hub;
             if (!adjacent(from, space)) return null;
@@ -194,17 +234,24 @@ function build(width: number, depth: number, center: number, selections: SizedRe
     return { width, depth, spaces, links, hubKeys, entryKey, opening, lowerLandingKey, upperLandingKey, upperLandingClearDepth: HUB_DEPTH };
 }
 /** Finite radial candidates; a feasible hub is preferred independently of the gallery's floor area. */
-export function packResidentialHub(rooms: LayoutRoom[], assignment: Map<string, number>, storeys: number, rise: number, fixedWidth: number | null, fixedDepth: number | null): HubPacking | null {
-    return searchHub(rooms, assignment, storeys, rise, fixedWidth, fixedDepth, true);
+export function packResidentialHub(rooms: LayoutRoom[], assignment: Map<string, number>, storeys: number, rise: number, fixedWidth: number | null, fixedDepth: number | null, variant: 'balanced' | 'compact' | 'daylight' = 'balanced'): HubPacking | null {
+    return searchHub(rooms, assignment, storeys, rise, fixedWidth, fixedDepth, true, variant);
 }
-function searchHub(rooms: LayoutRoom[], assignment: Map<string, number>, storeys: number, rise: number, fixedWidth: number | null, fixedDepth: number | null, allowTurn: boolean): HubPacking | null {
+function searchHub(rooms: LayoutRoom[], assignment: Map<string, number>, storeys: number, rise: number, fixedWidth: number | null, fixedDepth: number | null, allowTurn: boolean, variant: 'balanced' | 'compact' | 'daylight'): HubPacking | null {
     const allRecipes = Array.from({ length: storeys }, (_, floor) => recipes(rooms, floor, assignment, storeys));
     if (allRecipes.some(r => !r.length)) return null;
     const stairRun = Math.ceil(rise / .175) * .27;
     let best: HubPacking | null = null, bestScore = Infinity;
     const widths = fixedWidth !== null ? [fixedWidth] : Array.from({ length: 33 }, (_, i) => 8 + i * .5);
     for (const width of widths) for (const center of [2.8, 3.2, 3.6, 3.8, 4.2, 4.6, 5]) for (const ratio of [.5, .44, .56]) {
-        const options = allRecipes.map(floor => floor.map(recipe => sized(recipe, width, center, ratio, storeys)).filter((s): s is SizedRecipe => s !== null).sort((a, b) => a.score - b.score).slice(0, 6));
+        const options = allRecipes.map(floor => {
+            const candidates = floor.map(recipe => sized(recipe, width, center, ratio, storeys)).filter((s): s is SizedRecipe => s !== null).sort((a, b) => a.score - b.score);
+            const core = candidates.filter(c => c.recipe.coreBath), ordinary = candidates.filter(c => !c.recipe.coreBath);
+            // Preserve both four-wing and rear-room core topologies. Ranking only
+            // minimum room depths would discard the four-wing option before the
+            // aligned stair/landing depth is known.
+            return core.length ? [...core.filter(c => c.recipe.coreUtility && !c.recipe.rear).slice(0, 3), ...core.filter(c => !c.recipe.coreUtility && !c.recipe.rear).slice(0, 3), ...core.filter(c => c.recipe.rear).slice(0, 3), ...ordinary.slice(0, 6)] : ordinary.slice(0, 6);
+        });
         if (options.some(o => !o.length)) continue;
         const combinations = storeys === 1 ? options[0].map(a => [a]) : options[0].flatMap(a => options[1].map(b => [a, b]));
         for (const selections of combinations) {
@@ -223,12 +270,18 @@ function searchHub(rooms: LayoutRoom[], assignment: Map<string, number>, storeys
             if (!candidate) continue;
             const aspect = Math.max(width / depth, depth / width), requested = rooms.reduce((n, r) => n + area(r), 0), net = candidate.spaces.filter(s => s.program).reduce((n, s) => n + s.width * s.depth, 0), circulation = candidate.spaces.filter(s => !s.program).reduce((n, s) => n + s.width * s.depth, 0);
             // Excess room area and circulation are visible costs, never a claim of design optimality.
-            const score = width * depth * (1 + .1 * (aspect - 1) ** 2) + (net - requested) * .2 + circulation * .5 + selections.reduce((n, s) => n + s.score, 0) * .15;
+            const programme = candidate.spaces.filter(s => s.program);
+            const excess = programme.reduce((n, s) => n + Math.max(0, s.width * s.depth - area(s.program!) * (['bathroom', 'utility'].includes(s.program!.use) ? 1.5 : 1.8)) ** 2, 0);
+            const elongated = programme.reduce((n, s) => n + Math.max(0, Math.max(s.width / s.depth, s.depth / s.width) - 2.2) ** 2, 0);
+            // Exposure is a geometric proxy only: count physical exterior faces
+            // and penalise deep room envelopes; no sun-path/illuminance claim.
+            const exposure = programme.filter(s => !['bathroom', 'utility', 'garage'].includes(s.program!.use)).reduce((n, s) => n + Number(s.x < T + EPS) + Number(s.y < T + EPS) + Number(s.x + s.width > width - T - EPS) + Number(s.y + s.depth > depth - T - EPS), 0);
+            const score = width * depth * (1 + .1 * (aspect - 1) ** 2) * (variant === 'compact' ? 1.7 : 1) + (net - requested) * .2 + circulation * (variant === 'compact' ? .7 : 1.2) + excess * .8 + elongated * (variant === 'daylight' ? 100 : variant === 'balanced' ? 20 : 2) - exposure * (variant === 'daylight' ? 40 : 1) + selections.reduce((n, s) => n + s.score, 0) * .15;
             if (score < bestScore) { best = candidate; bestScore = score; }
         }
     }
     if (!best && allowTurn && fixedWidth !== null && fixedDepth !== null && fixedWidth !== fixedDepth) {
-        const turned = searchHub(rooms, assignment, storeys, rise, fixedDepth, fixedWidth, false);
+        const turned = searchHub(rooms, assignment, storeys, rise, fixedDepth, fixedWidth, false, variant);
         if (turned) best = { ...turned, turned: true };
     }
     return best;

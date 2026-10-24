@@ -1,6 +1,6 @@
-import type { ActivityDefinition, ElementType, Objective, Project, Scenario, SequenceAlternative } from '../domain/types';
+import type { ActivityDefinition, ElementType, Objective, Project, Role, Scenario, SequenceAlternative } from '../domain/types';
 import { estimate } from './cost';
-import { buildSchedule,generateActivities } from './schedule';
+import { buildSchedule,generateActivities,scheduleReviewIsCurrent,stampScheduleCandidate } from './schedule';
 
 const knownRate = (type:ElementType) => [type.materialRate, type.labourRate, type.equipmentRate].every(rate => typeof rate === 'number' && Number.isFinite(rate) && rate >= 0);
 const unitCost = (type:ElementType) => (type.materialRate ?? Infinity) * (1 + type.wastePercent / 100) + (type.labourRate ?? Infinity) + (type.equipmentRate ?? Infinity);
@@ -70,10 +70,10 @@ export function compareScenarios(project:Project, objective:Objective):Scenario[
     const signature = JSON.stringify([replacement.changes, crews, procurementDays,sequence.alternative?.id??null]);
     if (signatures.has(signature)) return;
     signatures.add(signature);
-    const candidate:Project = { ...project, elements:project.elements.map(element => {
+    const candidate:Project = stampScheduleCandidate(project,{ ...project, elements:project.elements.map(element => {
       const target = project.types.find(type => type.id === replacement.changes[element.id]);
       return target ? { ...element, typeId:target.id, material:target.material } : element;
-    }), schedule:{ ...project.schedule, crews, procurementDays,...(sequence.preview?{activities:sequence.preview.activities}:{}) } };
+    }), schedule:{ ...project.schedule, crews, procurementDays,...(sequence.preview?{activities:sequence.preview.activities}:{}) } });
     const schedule = buildSchedule(candidate);
     const cost = estimate(candidate, schedule);
     const reasons:string[] = [];
@@ -87,7 +87,7 @@ export function compareScenarios(project:Project, objective:Objective):Scenario[
     if (Object.keys(replacement.changes).length) changes.push(`${replacement.name}; ${Object.keys(replacement.changes).length} editable elements; geometry unchanged`);
     if (crews !== baseCrews) changes.push(`${crews} available crews (baseline ${baseCrews}); enables task concurrency only`);
     if (procurementDays !== project.schedule.procurementDays) changes.push(`Procurement release offset ${procurementDays} calendar days (baseline ${project.schedule.procurementDays}); requires earlier confirmed ordering`);
-    if(sequence.alternative&&sequence.preview){changes.push(`Approved sequence: ${sequence.alternative.name}; ${sequence.alternative.rationale}`);for(const change of sequence.preview.changes)changes.push(`${change.activityId}: predecessors [${change.before.join(', ')||'none'}] → [${change.after.join(', ')||'none'}]`);}
+    if(sequence.alternative&&sequence.preview){changes.push(`Approved sequence: ${sequence.alternative.name}; ${sequence.alternative.rationale}`);for(const change of sequence.preview.changes)changes.push(`${change.activityId}: predecessors [${change.before.join(', ')||'none'}] → [${change.after.join(', ')||'none'}]`);changes.push('Adopting this dependency network expires sequence approvals against the previous baseline; definitions and rationale are retained.');}
     scenarios.push({ id:baseline ? 'baseline' : `scenario-${scenarios.length}`, name:baseline ? 'Baseline' : [sequence.alternative?.name??'',Object.keys(replacement.changes).length ? replacement.name : '', crews !== baseCrews ? `${crews} crews` : '', procurementDays !== project.schedule.procurementDays ? 'Earlier procurement' : ''].filter(Boolean).join(' · ') || 'Same approved design', baselineVersion:project.version, changes, crews, procurementDays, typeChanges:replacement.changes, cost, schedule, feasible:reasons.length === 0, reasons, dominated:false,...(sequence.alternative?{sequenceAlternativeId:sequence.alternative.id,sequenceRationale:sequence.alternative.rationale,sequenceChanges:sequence.preview!.changes}:{}) });
   };
   evaluate(replacements[0], baseCrews, project.schedule.procurementDays,sequences[0], true);
@@ -115,4 +115,32 @@ export function compareScenarios(project:Project, objective:Objective):Scenario[
     return [baseline, ...scenarios.slice(1).filter(scenario => !scenario.feasible).sort((a, b) => a.reasons.length - b.reasons.length || a.cost.total - b.cost.total).slice(0, 3)];
   }
   return [baseline, ...unique.slice(0, 7)];
+}
+
+/** Recalculate from live approved inputs at adoption; a worker result is never authority to mutate a project. */
+export function adoptScenario(project:Project,scenario:Scenario,objective:Objective,role:Role):Project {
+  if(role==='reviewer')throw new Error('Reviewers cannot adopt construction scenarios.');
+  if(scenario.baselineVersion!==project.version)throw new Error('The project changed. Re-run comparison before adopting a scenario.');
+  if(!scheduleReviewIsCurrent(project))throw new Error('Review the changed model and construction activity scope before adopting a scenario.');
+  if(role==='contributor'&&Object.keys(scenario.typeChanges).length)throw new Error('Only an architect or administrator can adopt assembly changes.');
+  const matches=(candidate:Scenario)=>candidate.crews===scenario.crews&&candidate.procurementDays===scenario.procurementDays&&candidate.sequenceAlternativeId===scenario.sequenceAlternativeId&&JSON.stringify(Object.entries(candidate.typeChanges).sort())===JSON.stringify(Object.entries(scenario.typeChanges).sort());
+  const live=compareScenarios(project,objective).find(candidate=>candidate.feasible&&matches(candidate));
+  if(!scenario.feasible||!live)throw new Error('This option no longer satisfies the approved inputs and constraints. Re-run comparison.');
+  if(live.cost.total!==scenario.cost.total||live.cost.completeness!==scenario.cost.completeness||live.schedule.durationDays!==scenario.schedule.durationDays||live.schedule.workingDays!==scenario.schedule.workingDays||live.schedule.finishDate!==scenario.schedule.finishDate||live.schedule.crewDays!==scenario.schedule.crewDays)throw new Error('The displayed cost or construction dates changed. Re-run comparison before adopting this option.');
+  let activities=project.schedule.activities;
+  if(live.sequenceAlternativeId){
+    const alternative=project.schedule.sequenceAlternatives?.find(item=>item.id===live.sequenceAlternativeId);
+    if(!alternative)throw new Error('The sequencing alternative is no longer available.');
+    const preview=previewSequenceAlternative(project,alternative);
+    if(preview.issues.length)throw new Error(preview.issues.join(' '));
+    activities=preview.activities;
+  }
+  let next:Project={...project,elements:project.elements.map(element=>{
+    const type=project.types.find(candidate=>candidate.id===live.typeChanges[element.id]);
+    return type?{...element,typeId:type.id,material:type.material}:element;
+  }),schedule:{...project.schedule,crews:live.crews,procurementDays:live.procurementDays,activities}};
+  if(sequenceBaselineSignature(project)!==sequenceBaselineSignature(next))next={...next,schedule:{...next.schedule,sequenceAlternatives:next.schedule.sequenceAlternatives?.map(alternative=>({...alternative,approved:false}))}};
+  next=stampScheduleCandidate(project,next,new Date().toISOString());
+  if(!buildSchedule(next).feasible)throw new Error('The current activity plan is unresolved. Review scope before adopting a scenario.');
+  return next;
 }

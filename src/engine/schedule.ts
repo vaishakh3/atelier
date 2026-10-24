@@ -5,6 +5,36 @@ const DAY = 86_400_000;
 const iso = (date:Date) => date.toISOString().slice(0, 10);
 const isDate = (value:string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && iso(new Date(`${value}T00:00:00Z`)) === value;
 
+/** Canonical source text, not a digital signature. Cosmetic labels and rates do not alter work scope. */
+export function scheduleModelSignature(project:Project):string {
+  return 'atelier-model-work-v1:'+JSON.stringify({
+    levels:project.levels.map(({id,elevation})=>({id,elevation})).sort((a,b)=>a.id.localeCompare(b.id)),
+    elements:project.elements.filter(element=>element.kind!=='reference').map(element=>({id:element.id,kind:element.kind,levelId:element.levelId,typeId:element.typeId,hostId:element.hostId??null,x:element.x,y:element.y,z:element.z,width:element.width,depth:element.depth,height:element.height,rotation:element.rotation})).sort((a,b)=>a.id.localeCompare(b.id)),
+    types:project.types.filter(type=>project.elements.some(element=>element.typeId===type.id)).map(({id,kind,unit,productivity})=>({id,kind,unit,productivity})).sort((a,b)=>a.id.localeCompare(b.id)),
+  });
+}
+
+export function scheduleActivitySignature(activities:ActivityDefinition[]):string {
+  return 'atelier-activity-review-v1:'+JSON.stringify(activities.map(activity=>({
+    id:activity.id,category:activity.category,unit:activity.unit,
+    quantityMode:activity.quantityMode??'manual',quantity:activity.quantityMode==='model'?null:activity.quantity,
+    productivityMode:activity.productivityMode??'manual',productivity:activity.productivityMode==='type'?null:activity.productivity,
+    minDuration:activity.minDuration,predecessors:[...activity.predecessors].sort(),crewDemand:activity.crewDemand,maxCrews:activity.maxCrews,leadTime:activity.leadTime,
+    fixedDuration:activity.fixedDuration??null,sourceElementIds:activity.sourceElementIds?[...new Set(activity.sourceElementIds)].sort():null,
+  })).sort((a,b)=>a.id.localeCompare(b.id)));
+}
+
+export function scheduleReviewIsCurrent(project:Project):boolean {
+  const review=project.schedule.modelReview;
+  return !project.schedule.modelReviewRequired&&(!review||(review.modelSignature===scheduleModelSignature(project)&&review.activitySignature===scheduleActivitySignature(project.schedule.activities.length?project.schedule.activities:generateActivities(project))));
+}
+
+/** For an explicitly reviewed, validated option only. A stale original cannot be legitimised by stamping its candidate. */
+export function stampScheduleCandidate(baseline:Project,candidate:Project,acceptedAt=baseline.schedule.modelReview?.acceptedAt??baseline.updatedAt):Project {
+  if(!scheduleReviewIsCurrent(baseline))return{...candidate,schedule:{...candidate.schedule,modelReviewRequired:true}};
+  return{...candidate,schedule:{...candidate.schedule,modelReviewRequired:false,modelReview:{modelSignature:scheduleModelSignature(candidate),activitySignature:scheduleActivitySignature(candidate.schedule.activities.length?candidate.schedule.activities:generateActivities(candidate)),acceptedAt}}};
+}
+
 /** A deliberately preliminary low-rise network; every activity remains editable. */
 export function generateActivities(project:Project):ActivityDefinition[] {
   const measured = quantities({...project,types:project.types.map(type=>({...type,unit:'m²'}))});
@@ -21,6 +51,7 @@ export function generateActivities(project:Project):ActivityDefinition[] {
     make('foundations', 'Foundations — confirm engineering scope', 'allowance', footprint, 'm² footprint proxy', 25, 3, ['site']),
     make('structure', 'Slab construction — structural sequence to confirm', 'slab', area('slab'), 'm² floor area', 30, 3, ['foundations'], 0, undefined, 'model'),
     make('walls', 'Wall construction', 'wall', wallArea, 'm² net wall', 25, 2, ['structure'], 0, undefined, 'model'),
+    ...(project.elements.some(element=>element.kind==='stair')?[make('stairs', 'Stair construction — confirm structural sequence', 'stair', project.elements.filter(element=>element.kind==='stair').length, 'ea', .5, 2, ['structure'], 0, undefined, 'model')]:[]),
     make('roof', 'Roof assembly', 'roof', area('roof'), 'm² plan area', 30, 2, ['walls'], 5, undefined, 'model'),
     make('openings', 'Windows installation', 'window', windowCount, 'ea', 6, 1, ['walls'], 10, undefined, 'model'),
     make('doors', 'Doors installation', 'door', doorCount, 'ea', 6, 1, ['walls'], 5, undefined, 'model'),
@@ -31,7 +62,7 @@ export function generateActivities(project:Project):ActivityDefinition[] {
 }
 
 /** A selector is either all live elements in a category or an explicit deduplicated subset. */
-function resolveModelQuantity(project:Project, activity:ActivityDefinition):{ quantity:number; issues:string[]; error?:string } {
+export function resolveModelQuantity(project:Project, activity:ActivityDefinition):{ quantity:number; issues:string[]; error?:string } {
   const unit = (['m²', 'm³', 'ea', 'm'] as const).find(candidate => activity.unit === candidate || activity.unit.startsWith(`${candidate} `));
   if (activity.category === 'allowance' || activity.category === 'reference' || !unit) return { quantity:0, issues:[], error:`${activity.name}: no supported model measurement rule for ${activity.category} / ${activity.unit}; enter a manual quantity.` };
   const selected = activity.sourceElementIds ? new Set(activity.sourceElementIds) : null;
@@ -49,7 +80,9 @@ function resolveModelQuantity(project:Project, activity:ActivityDefinition):{ qu
   if (invalid) return { quantity:0, issues, error:`${activity.name}: invalid source geometry (${invalid.name}); correct model dimensions before scheduling.` };
   const incompatible = matches.find(line => line.unit !== unit);
   if (incompatible) return { quantity:0, issues, error:`${activity.name}: ${incompatible.kind} cannot be measured in ${unit}; select a supported unit or a manual quantity.` };
-  return { quantity:Math.round(matches.reduce((sum, line) => sum + line.quantity, 0) * 1e6) / 1e6, issues };
+  const quantity=Math.round(matches.reduce((sum, line) => sum + line.quantity, 0) * 1e6) / 1e6;
+  if(selected&&[...selected].some(id=>!project.elements.some(element=>element.id===id)))return{quantity,issues,error:`${activity.name}: source IDs are stale. Review the model-to-activity mapping before scheduling; missing work is not zero work.`};
+  return { quantity, issues };
 }
 
 /** Assembly productivity is expressed in that assembly's native quantity unit per working day. */
@@ -77,6 +110,9 @@ export function buildSchedule(project:Project, overrides:{crews?:number;procurem
   const crews = overrides.crews ?? config.crews;
   const procurement = overrides.procurementDays ?? config.procurementDays;
   const failure = (reason:string):ScheduleResult => ({ activities:[], startDate:config.startDate, finishDate:config.startDate, durationDays:0, workingDays:0, feasible:false, issues:[...issues, reason], criticalPath:[], crewDays:0 });
+  if(config.modelReviewRequired)return failure('The model changed after the construction plan was reviewed. Review model quantities and activity scope before using completion dates or ranking scenarios.');
+  if(config.modelReview&&(config.modelReview.modelSignature!==scheduleModelSignature(project)||config.modelReview.activitySignature!==scheduleActivitySignature(input)))return failure('The reviewed model scope or activity network changed. Review model quantities and activity scope again before using completion dates or ranking scenarios.');
+  if(!config.activities.length&&!project.elements.some(element=>!['room','reference'].includes(element.kind)))return failure('There is no modelled construction work or entered activity network. Define work scope before estimating completion; an empty model is not a zero-day building.');
   if (!isDate(config.startDate)) return failure('Project start date must be a valid ISO date.');
   const calendar = Array.from(new Set(config.workingDays));
   if (!calendar.length || calendar.some(day => !Number.isInteger(day) || day < 0 || day > 6)) return failure('Working calendar must include valid weekdays (0 Sunday to 6 Saturday).');
@@ -88,6 +124,8 @@ export function buildSchedule(project:Project, overrides:{crews?:number;procurem
   if (crews > project.constraints.maxCrews) return failure(`Crew count ${crews} exceeds project limit ${project.constraints.maxCrews}.`);
   if (!input.length) return failure('Schedule has no activities.');
   for (const activity of input) {
+    const missing=(activity.sourceElementIds??[]).filter(id=>!project.elements.some(element=>element.id===id));
+    if(missing.length)return failure(`${activity.name}: source IDs ${missing.join(', ')} are stale. Review the model-to-activity mapping; missing work is not zero work.`);
     if (activity.quantityMode === 'model') {
       const resolved = resolveModelQuantity(project, activity);
       issues.push(...resolved.issues);

@@ -1,3 +1,4 @@
+import type {PlanningContext} from './planning';
 export type ElementKind = 'wall' | 'slab' | 'door' | 'window' | 'room' | 'roof' | 'stair' | 'reference';
 export type Role = 'admin' | 'editor' | 'contributor' | 'reviewer';
 export type ViewMode = '3d' | 'plan' | 'section' | 'elevation';
@@ -8,10 +9,10 @@ export interface ElementType { id:string; name:string; kind:ElementKind; materia
 export interface Allowance { id:string; name:string; amount:number|null; included:boolean; }
 export interface ActivityDefinition { id:string; name:string; category:ElementKind|'allowance'; quantity:number; unit:string; productivity:number; minDuration:number; predecessors:string[]; crewDemand:number; maxCrews:number; leadTime:number; fixedDuration?:number; quantityMode?:'model'|'manual'; sourceElementIds?:string[]; productivityMode?:'type'|'manual'; }
 export interface SequenceAlternative { id:string; name:string; approved:boolean; rationale:string; baselineSignature:string; predecessors:Record<string,string[]>; }
-export interface ScheduleConfig { startDate:string; workingDays:number[]; crews:number; crewCostPerDay:number; overheadPerDay:number; procurementDays:number; activities:ActivityDefinition[]; holidays?:string[]; sequenceAlternatives?:SequenceAlternative[]; }
+export interface ScheduleConfig { startDate:string; workingDays:number[]; crews:number; crewCostPerDay:number; overheadPerDay:number; procurementDays:number; activities:ActivityDefinition[]; holidays?:string[]; sequenceAlternatives?:SequenceAlternative[]; modelReview?:{modelSignature:string;activitySignature:string;acceptedAt:string}; modelReviewRequired?:boolean; }
 export interface Constraints { budget:number|null; deadline:string|null; maxCrews:number; lockedElementIds:string[]; lockedProperties:string[]; }
 export interface AuditEntry { id:string; actor:string; timestamp:string; action:string; affectedIds:string[]; }
-export interface Project { schemaVersion:1; id:string; name:string; description:string; location:string; units:'m'|'ft'; currency:'INR'|'USD'|'EUR'; version:number; createdAt:string; updatedAt:string; levels:Level[]; grids:GridLine[]; elements:BimElement[]; types:ElementType[]; allowances:Allowance[]; schedule:ScheduleConfig; constraints:Constraints; audit:AuditEntry[]; }
+export interface Project { schemaVersion:1; id:string; name:string; description:string; location:string; units:'m'|'ft'; currency:'INR'|'USD'|'EUR'; version:number; createdAt:string; updatedAt:string; levels:Level[]; grids:GridLine[]; elements:BimElement[]; types:ElementType[]; allowances:Allowance[]; schedule:ScheduleConfig; constraints:Constraints; audit:AuditEntry[]; planning?:PlanningContext; }
 export interface QuantityLine { elementId:string; name:string; kind:ElementKind; typeId:string; quantity:number; unit:string; formula:string; issues:string[]; }
 export interface CostLine { id:string; name:string; sourceIds:string[]; quantity:number; unit:string; material:number|null; labour:number|null; equipment:number|null; waste:number; total:number|null; formula:string; rateDate:string; issues:string[]; rateCurrency?:'INR'|'USD'|'EUR'; rateSource?:string; }
 export interface CostResult { lines:CostLine[]; material:number; labour:number; equipment:number; waste:number; allowances:number; overhead:number; total:number; completeness:number; issues:string[]; }
@@ -26,7 +27,7 @@ export interface LevelCreation {levelId:string;before:null;after:Level}
 export interface RepetitionProposal {sourceIds:string[];count:number;offsetX:number;offsetY:number;idPrefix:string;sources:BimElement[]}
 export type LayoutUse = 'bedroom'|'bathroom'|'living'|'kitchen'|'dining'|'theater'|'pool'|'study'|'utility'|'garage'|'other';
 export interface LayoutRoom {key:string;name:string;use:LayoutUse;area:number|null;attachedTo:string|null;floor?:0|1|null}
-export interface LayoutSpec {levelId:string;footprintId:string|null;width:number|null;depth:number|null;rooms:LayoutRoom[];storeys?:1|2|null;floorHeight?:number|null;replaceConcept?:boolean|null}
+export interface LayoutSpec {levelId:string;footprintId:string|null;width:number|null;depth:number|null;rooms:LayoutRoom[];storeys?:1|2|null;floorHeight?:number|null;replaceConcept?:boolean|null;variant?:'balanced'|'compact'|'daylight'|null}
 export interface LayoutRequest extends LayoutSpec {idPrefix:string}
 export interface LayoutProposal extends LayoutRequest {baselineVersion:number}
 export interface AiProposal { id:string; prompt:string; summary:string; kind:'edit'|'analysis'|'schedule'|'repetition'|'layout'; changes:ElementChange[]; issues:string[]; selectedIds:string[]; model:string; createdAt:string; crewCount?:number; repetition?:RepetitionProposal;layout?:LayoutProposal;creations?:ElementCreation[];levelCreations?:LevelCreation[];removals?:ElementRemoval[]; }

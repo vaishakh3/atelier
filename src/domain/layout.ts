@@ -4,6 +4,10 @@ import { footprint, localToWorld, validateModelGeometry, worldToLocal } from '..
 import type { Point2 } from '../model/geometry';
 import { packResidentialHub } from './residentialPacking';
 import type { HubPacking } from './residentialPacking';
+import { assessLayoutQuality } from './layoutQuality';
+import type { LayoutQualityAssessment } from './layoutQuality';
+import { reviewedSiteEnvelope } from '../engine/planningChecks';
+export type { LayoutQualityAssessment, LayoutRoomAssessment, LayoutRelationshipAssessment } from './layoutQuality';
 export interface LayoutRoomResult {
     key: string;
     elementId: string;
@@ -60,6 +64,7 @@ export interface LayoutPreview {
     floors: LayoutFloorPreview[];
     strategy: 'compact-hub' | 'zoned-gallery';
     connections: LayoutConnection[];
+    quality?: LayoutQualityAssessment;
     metrics?: {
         circulationArea: number;
         programmeArea: number;
@@ -211,7 +216,7 @@ export function previewLayout(project: Project, request: LayoutRequest): LayoutP
     const fail = (message: string): LayoutPreview => ({ ...result, elements: [], rooms: [], levels: [], removedElements: [], floors: [], connections: [], circulation: undefined, issues: [message] });
     if (!request || !/^[A-Za-z0-9_-]{1,60}$/.test(request.idPrefix ?? ''))
         return fail('Use a stable 1–60 character layout ID prefix.');
-    const parsed = layoutSpecSchema.safeParse({ levelId: request.levelId, footprintId: request.footprintId, width: request.width, depth: request.depth, rooms: request.rooms, storeys: request.storeys, floorHeight: request.floorHeight, replaceConcept: request.replaceConcept });
+    const parsed = layoutSpecSchema.safeParse({ levelId: request.levelId, footprintId: request.footprintId, width: request.width, depth: request.depth, rooms: request.rooms, storeys: request.storeys, floorHeight: request.floorHeight, replaceConcept: request.replaceConcept, variant: request.variant });
     if (!parsed.success)
         return fail('Provide 1–16 named rooms, supported floors/uses, positive areas, 4–60 m dimensions, and a 3–4 m floor height.');
     const input = parsed.data, storeys = input.storeys ?? 1, replacing = input.replaceConcept === true;
@@ -351,7 +356,7 @@ export function previewLayout(project: Project, request: LayoutRequest): LayoutP
     }
     const fixedW = selected?.width ?? input.width, fixedD = selected?.depth ?? input.depth;
     let chosen: Plan | null = null, best = Infinity;
-    const packedHub = packResidentialHub(input.rooms, assignment, storeys, rise, fixedW, fixedD);
+    const packedHub = packResidentialHub(input.rooms, assignment, storeys, rise, fixedW, fixedD, input.variant ?? 'balanced');
     if (packedHub) chosen = { plans: [], width: packedHub.width, depth: packedHub.depth, frontDepth: 0, rearDepth: 0, coreWidth: 0, stairRun, steps, turned: packedHub.turned, hub: packedHub };
     for (const w of chosen ? [] : fixedW !== null ? [fixedW] : Array.from({ length: 113 }, (_, i) => 4 + i * .5)) {
         const candidate = plan(w, fixedD);
@@ -373,6 +378,29 @@ export function previewLayout(project: Project, request: LayoutRequest): LayoutP
     const p = chosen;
     result.strategy = p.hub ? 'compact-hub' : 'zoned-gallery';
     result.footprint = { x: anchor?.x ?? 0, y: anchor?.y ?? 0, width: p.turned ? p.depth : p.width, depth: p.turned ? p.width : p.depth, rotation: anchor?.rotation ?? 0, levelId: baseLevel.id };
+    // Generated walls establish the highest physical point (there is no roof).
+    // A blank source model cannot supply this future height to a dated worksheet.
+    const surveyGround = project.planning?.groundElevation;
+    const anticipatedHeight = surveyGround != null && Number.isFinite(surveyGround) ? baseZ + storeys * rise - T - surveyGround : undefined;
+    const site = reviewedSiteEnvelope(project, undefined, anticipatedHeight);
+    if (site) {
+        const { plot, west, east, south, north } = site;
+        const usableWidth = plot.width - west - east, usableDepth = plot.depth - south - north;
+        if (usableWidth <= 0 || usableDepth <= 0)
+            return fail('The entered reviewed yard limits leave no usable plot rectangle. Review the cited site limits before generating a house.');
+        if (selected) {
+            const points = footprint(selected).map(point => worldToLocal(plot, point));
+            if (points.some(point => point.x < -EPS || point.y < -EPS || point.x > plot.width + EPS || point.y > plot.depth + EPS))
+                return fail('The exact selected slab lies outside the entered plot boundary. Atelier will not move or resize it; correct the site/slab survey or select a footprint inside the plot.');
+            if (points.some(point => point.x < west - EPS || point.y < south - EPS || point.x > plot.width - east + EPS || point.y > plot.depth - north + EPS))
+                return fail('The exact selected slab crosses a team-reviewed entered yard limit. Atelier will not move or resize it; revise the selected footprint or review the applicable cited limit before acceptance.');
+        } else {
+            if (result.footprint.width > usableWidth + EPS || result.footprint.depth > usableDepth + EPS)
+                return fail(`The bounded ${round(result.footprint.width)} × ${round(result.footprint.depth)} m house does not fit the entered ${round(usableWidth)} × ${round(usableDepth)} m usable plot frame${site.sourceReviewed ? ' after any reviewed entered yards' : ''}. Choose a smaller programme or another layout, or review the site inputs; the house is not stretched or placed outside the plot.`);
+            const position = localToWorld(plot, west + (usableWidth - result.footprint.width) / 2, south + (usableDepth - result.footprint.depth) / 2);
+            result.footprint = { ...result.footprint, ...position, rotation: plot.rotation };
+        }
+    }
     const designOrigin = p.turned ? localToWorld(result.footprint, result.footprint.width, 0) : result.footprint, designFrame = { x: designOrigin.x, y: designOrigin.y, rotation: result.footprint.rotation + (p.turned ? 90 : 0) };
     const oldFrame = anchor ? { x: anchor.x, y: anchor.y, width: anchor.width, depth: anchor.depth, rotation: anchor.rotation, levelId: anchor.levelId } : undefined;
     const removals: BimElement[] = [];
@@ -655,6 +683,13 @@ export function previewLayout(project: Project, request: LayoutRequest): LayoutP
     const circulationArea = spaces.filter(s => s.circulation).reduce((n, s) => n + s.width * s.depth, 0), programmeArea = spaces.filter(s => s.program).reduce((n, s) => n + s.width * s.depth, 0);
     const hubs = p.hub ? spaces.filter(s => p.hub!.hubKeys[s.floor] === s.key) : [], branches = spaces.filter(s => s.circulation && !hubs.includes(s));
     result.metrics = { circulationArea: round(circulationArea), programmeArea: round(programmeArea), circulationRatio: round(circulationArea / (circulationArea + programmeArea)), daylightRooms: daylightCount, habitableRooms: habitableCount, glazingTargetRatio: GLAZING, hubArea: round(hubs.reduce((n, s) => n + s.width * s.depth, 0)), longestAccessBranch: round(Math.max(0, ...branches.map(s => Math.max(s.width, s.depth)))) };
+    result.quality = assessLayoutQuality(result);
+    if (spaces.some(s => s.key.startsWith('@service-access-'))) result.assumptions.push('Small service rooms use bounded rectangular targets. Residual aligned bay area is modelled explicitly as shared service access alcoves and included in circulation; it is not silently added to a WC/laundry or omitted from efficiency measurements. Review any excessive access area before detailing.');
+    if (input.variant === 'daylight') result.assumptions.push('The daylight alternative ranks a finite set of exterior-face and room-proportion proxies. It does not evaluate compass orientation, solar access, illuminance, climate, obstructions or legal daylight requirements, and may use a larger footprint.');
+    if (site) result.assumptions.push(selected ? 'The selected slab retains its exact surveyed geometry and has been checked against the entered rectangular plot and any team-reviewed cited yard limits. Other legal requirements remain separate preliminary checks.' : 'The bounded concept envelope is centred inside the usable entered rectangular plot frame and aligned to its rotation. House dimensions are retained rather than stretched to fill the plot. Replanning may relocate the reviewed concept cohort; retained/manual geometry is never moved. Plot containment is geometric only; only team-reviewed cited entered yard limits reduce this frame. Road access, true north, Vaastu preferences and all other local requirements still require their separate checks.');
+    if (site && !site.sourceReviewed) result.assumptions.push('The rule source or its applicability is unconfirmed, incomplete, stale or unsupported: no yard limits were inferred or applied. Only the entered physical plot boundary constrained placement.');
+    if (site && project.planning?.ruleSource.worksheet === 'kerala-a1-2025' && anticipatedHeight === undefined) result.assumptions.push('The dated Kerala worksheet height applicability remains unresolved without an entered survey ground elevation. Its yard values are not applied to generation.');
+    if (site && project.planning?.ruleSource.worksheet === 'kerala-a1-2025' && anticipatedHeight !== undefined && anticipatedHeight > 10) result.assumptions.push(`The proposed model-envelope height of ${round(anticipatedHeight)} m exceeds the dated Kerala worksheet's 10 m applicability threshold. Its yard values are not applied; this threshold is not a universal legal height limit.`);
     result.assumptions.unshift(p.hub ? 'Compact hub concept: perimeter room wings meet a shared foyer or requested living/dining hub on multiple sides. Entrance and stair access use separate perpendicular branches, not a full-width gallery. No unrequested programme rooms are added; automatic foyers and landings are circulation only.' : 'Zoned gallery fallback: the bounded compact-hub candidates did not fit this programme/footprint. A full-width distribution gallery remains; this is a corridor-based concept requiring architect review, not a corridor-free or optimized house design.', 'Room areas are minimum net planning targets. Spare footprint area may enlarge rooms; exact dimensions and areas are listed. Walls are 0.20 m and clear shared circulation is 1.20 m as proposed concept dimensions, not code-certified minima.', 'Exterior glazing targets 15% of habitable room floor area; corner living rooms use two aspects where available. This is an opening-area proxy, not solar/daylight simulation. Site orientation, obstructions, privacy, climate and local requirements are unknown.', 'No roof, foundation engineering, detailed MEP, ventilation, permits or specialist construction costs are generated. Approved existing component types/rates are reused without filling unknown costs.');
     result.assumptions.push('Dedicated circulation metrics count automatic foyer, landing and access-branch rooms only. Access paths within requested living/dining rooms remain in programme area; a zero dedicated-circulation share does not mean zero circulation space. Hub area may include a requested social room, and longest branch excludes the primary shared hub. These measurements are not optimality, cost or efficiency guarantees.');
     const kitchenServices = result.rooms.filter(r => r.use === 'utility' && result.rooms.some(k => k.key === r.accessFrom && k.use === 'kitchen'));

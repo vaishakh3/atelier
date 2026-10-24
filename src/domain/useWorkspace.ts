@@ -5,6 +5,7 @@ import {useCallback,useEffect,useRef,useState} from 'react';
 import type {Project,SavedVersion,ReviewComment,Role} from './types';
 import {createDemoProject,createBlankProject} from './seed';
 import {auditProject} from './transactions';
+import {invalidateScheduleReview} from '../engine/modelImpact';
 import {projectSchema} from './schema';
 import {DEFAULT_AI_MODEL} from './aiConfig';
 const CACHE='atelier-project-v1';
@@ -72,7 +73,7 @@ export function useWorkspace({identityRequired=false,userId,authenticated=true}:
  useEffect(()=>{if(!ready||!authenticated)return;let live=true;setVersions([]);setComments([]);Promise.all([apiFetch('/api/projects/'+project.id+'/versions').then(r=>r.ok?r.json():{versions:[]}),apiFetch('/api/projects/'+project.id+'/comments').then(r=>r.ok?r.json():{comments:[]})]).then(([v,c])=>{if(live){setVersions(v.versions||[]);setComments(c.comments||[]);}}).catch(()=>{});return()=>{live=false;};},[project.id,ready,authenticated,historyEpoch]);
  const commit=useCallback((next:Project|((p:Project)=>Project),action:string,ids:string[]=[])=>{
   if(!writable.current)return;
-  const previous=active.current,result=typeof next==='function'?next(previous):next,parsed=projectSchema.safeParse(result);
+  const previous=active.current,result=invalidateScheduleReview(previous,typeof next==='function'?next(previous):next),parsed=projectSchema.safeParse(result);
   if(!parsed.success){setError('The proposed project state is invalid. No changes were applied.');return;}
   undo.current.push(structuredClone(previous));undo.current=undo.current.slice(-60);redo.current=[];
   const value=auditProject({...result,version:previous.version,audit:previous.audit},action,ids,actor.current);active.current=value;setProject(value);setTick(x=>x+1);
